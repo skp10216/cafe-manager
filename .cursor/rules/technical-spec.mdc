@@ -1,0 +1,394 @@
+---
+alwaysApply: true
+---
+# 카페매니저 – 최종 기술개발 계획서 (기술개발.md)
+
+네이버 카페 자동 포스팅 & 게시글 관리 솔루션 **카페매니저**의 최종 기술 개발 방향과 원칙을 정리한 문서이다.  
+이 문서는 개발 전반(설계·구현·유지보수)의 기준점이며, Cursor / IDE에서 기능을 구현할 때 항상 이 문서를 우선 참조한다.
+
+---
+
+## 1. 프로젝트 개요
+
+### 1.1 서비스 개요
+
+- 서비스명: **카페매니저 (CafeManager)**
+- 목적:
+  - 네이버 카페(중고나라 등)에 상품을 판매하는 사업자를 위한
+  - **자동 포스팅 · 스케줄링 · 게시글 관리(강제 N개 유지 · 자동 삭제)** 기능을 제공하는 웹 기반 SaaS
+- 대상:
+  - 중고폰/중고 IT 기기 도·소매 사업자
+  - 네이버 카페를 주요 판로로 활용하는 리셀러/소상공인
+
+### 1.2 기술 개발 목표
+
+1. **안정적인 자동화 엔진 확보**
+   - Playwright 기반 브라우저 자동화를 Job/Worker 구조로 안정적으로 운영
+2. **관리형 B2B SaaS로 확장 가능한 구조**
+   - 사용자/스케줄/게시글/룰/로그/라이선스 등 관계형 데이터 기반 설계
+3. **유지보수성 높은 코드베이스**
+   - TypeScript, NestJS, Prisma, Next.js를 활용해
+   - 타입 안정성과 모듈화를 극대화
+4. **1개월/1년 기간제 라이선스를 통한 구독 수익 구조**
+   - 후행 단계(3단계)에서 쉽게 붙일 수 있도록 초기부터 설계 반영
+
+---
+
+## 2. 기술 스택 및 아키텍처 정의
+
+### 2.1 기술 스택
+
+- **Frontend**
+  - Framework: **Next.js (App Router) + React + TypeScript**
+  - UI: **MUI (Material UI)** + Emotion
+  - Form: **react-hook-form + Zod** (또는 class-validator와 궁합 고려)
+
+- **Backend API**
+  - Runtime: **Node.js (LTS)**
+  - Framework: **NestJS + TypeScript**
+  - ORM: **Prisma**
+  - DB: **PostgreSQL**
+  - Cache/Queue: **Redis (BullMQ)**
+
+- **Worker & Browser Automation**
+  - Worker: Node.js + TypeScript
+  - Queue: Redis + BullMQ
+  - Browser Automation: **Playwright (Chromium)**
+
+- **개발/배포 환경 (초기)**
+  - Docker Compose (Postgres, Redis)
+  - 환경변수 관리: `.env`, `.env.local`
+
+### 2.2 아키텍처 개요
+
+```text
+[Client Browser]
+      │
+      ▼
+[Next.js Frontend]
+      │  REST API (JSON)
+      ▼
+[NestJS Backend API]
+      │
+      ├─ PostgreSQL (Prisma)
+      ├─ Redis (BullMQ Job Queue)
+      │
+      └─ Enqueue Jobs ─────────► [Worker (Node + Playwright)]
+                                  ├─ 네이버 카페 로그인/세션 재사용
+                                  ├─ 글쓰기 / 삭제 / 내가 쓴 글 동기화
+                                  └─ 결과를 DB(Job/Logs/ManagedPosts)에 기록
+```
+
+- Frontend는 **Admin/운영 대시보드** 성격
+- Backend는 **도메인/비즈니스 로직 중심**
+- Worker는 **브라우저 자동화 실행 전용**
+
+---
+
+## 3. UI 라이브러리 및 UX 원칙
+
+### 3.1 UI 라이브러리
+
+- **MUI (Material UI)** 사용
+  - 빠른 개발과 일관된 디자인 확보
+  - Table / Dialog / Form / Layout 컴포넌트 재사용
+- 아이콘: **MUI Icons**
+- 스타일링:
+  - MUI `sx` props 또는 `styled` 사용
+  - 공통 스타일은 `theme` 또는 `components/ui` 계층에 모아서 관리
+
+### 3.2 UX 원칙
+
+1. **B2B 운영 도구 느낌**
+   - 복잡한 장식보다 정보 밀도와 가독성, 필터/검색 기능이 중요
+2. **반응형**
+   - 데스크톱 최적화 + 모바일에서도 기본 기능(로그 보기/스케줄 on/off) 가능
+3. **통일된 레이아웃**
+   - 상단 AppBar + 좌측 Nav(템플릿/스케줄/게시글/룰/로그/설정) 구조
+4. **에러/상태 피드백 명확**
+   - 포스팅 실패/세션 만료/Job 에러 등은 토스트/배너/로그 화면에서 명확히 인지 가능하게 설계
+
+---
+
+## 4. 구조 설계 (폴더 및 모듈 구조)
+
+### 4.1 Monorepo 구조 (권장)
+
+```text
+root/
+  apps/
+    web/        # Next.js 프론트엔드
+    api/        # NestJS 백엔드
+    worker/     # Worker + Playwright
+  packages/
+    core/       # 공통 타입, DTO, 유틸
+    config/     # 공통 ESLint, TSConfig 등
+  prisma/
+    schema.prisma
+  docs/
+    rule.md
+    기술개발.md (본 문서)
+  .env / .env.local / ...
+```
+
+- 공통 타입/유틸은 `packages/core`에서 관리
+- `prisma/schema.prisma`는 `api`와 `worker`에서 공유
+
+### 4.2 Backend (NestJS) 구조
+
+```text
+apps/api/src/
+  main.ts
+  app.module.ts
+  modules/
+    auth/
+    user/
+    naver-session/
+    template/
+    schedule/
+    managed-post/
+    rule/
+    job/
+    billing/         # 3단계에서 활성화
+  common/
+    dto/
+    guards/
+    filters/
+    interceptors/
+    utils/
+```
+
+- 모듈별로:
+  - `*.controller.ts` – 라우팅, 요청/응답 책임
+  - `*.service.ts` – 비즈니스 로직
+  - `*.dto.ts` – 입력/출력 데이터 정의
+- DB 접근은 `PrismaService`/Repository 계층을 통해 수행
+
+### 4.3 Frontend (Next.js) 구조
+
+```text
+apps/web/src/
+  app/
+    layout.tsx
+    page.tsx                 # 홈/대시보드
+    login/
+    templates/
+    schedules/
+    posts/
+    rules/
+    logs/
+    settings/
+  components/
+    layout/
+    common/
+    forms/
+    tables/
+  hooks/
+  lib/
+    api-client.ts            # API 호출 래퍼
+    auth.ts
+```
+
+- App Router를 사용한 Route 기반 Screen 구성
+- API는 백엔드 NestJS에 REST로 요청
+
+### 4.4 Worker 구조
+
+```text
+apps/worker/src/
+  main.ts                    # 워커 엔트리
+  queues/
+    index.ts
+    post.queue.ts
+  jobs/
+    init-naver-session.job.ts
+    sync-posts.job.ts
+    create-post.job.ts
+    delete-post.job.ts
+  playwright/
+    browserContext.ts        # 프로필/세션 관리
+    naverCafeClient.ts       # 네이버 카페 전용 액션 모듈
+  utils/
+    logger.ts
+```
+
+- Worker는 **비즈니스 의사결정 대신 실행에 집중**
+  - 어떤 글을 삭제/등록할지는 API 서버에서 결정
+  - Worker는 payload대로 Playwright 작업 수행 후 결과만 리포트
+
+---
+
+## 5. 개발 가이드
+
+### 5.1 기능 개발 우선순위 (단계별)
+
+#### 1단계 – MVP (필수)
+
+1. 네이버 계정 연동 및 세션 관리
+2. 템플릿 CRUD + 즉시 포스팅 기능
+3. 스케줄 CRUD + 스케줄 기반 포스팅 Job 생성
+4. “내가 쓴 글” 동기화 + 리스트 화면
+5. 기본 Job/에러 로그 및 대시보드
+6. Job 큐 + Worker + Playwright 구조 완성
+
+#### 2단계 – 운영 자동화 고도화
+
+1. 카페/게시판별 “강제 N개 유지” 정책 엔티티 및 로직
+2. 자동 삭제 기능(Job + Worker 연동)
+3. 멀티 카페/게시판 지원 (User 1:N Cafe/Board 관계 관리)
+
+#### 3단계 – 데이터·비즈니스 확장
+
+1. 1개월/1년 기간제 결제 연동 및 라이선스 만료 체크
+2. 운영 통계/리포트 화면 고도화 (포스팅·삭제 추이, 성공률 등)
+
+### 5.2 역할 분리 원칙
+
+- **Backend(API)**:
+  - 비즈니스 로직과 룰 결정
+  - “어떤 글을 생성/삭제/유지해야 하는지”는 여기서 결정
+- **Worker + Playwright**:
+  - 네이버 웹 UI 조작 실행
+  - 실패/성공 결과 및 스크린샷/로그만 보고
+
+> 의사결정과 실행을 분리하여
+> DOM 변경, 사이트 구조 변경에도 최대한 유연하게 대응할 수 있도록 한다.
+
+### 5.3 예외/에러 처리
+
+- API:
+  - NestJS `ExceptionFilter`로 통일된 에러 응답 포맷 유지
+  - DTO/검증을 활용해 잘못된 입력은 Controller 단계에서 차단
+- Worker:
+  - Job 단위 `try/catch` 필수
+  - 실패 시:
+    - `Job.status = failed`, `errorMessage` 저장
+    - 가능할 경우 Playwright 스크린샷 저장 후 경로 기록
+
+---
+
+## 6. 코드 스타일
+
+### 6.1 공통 규칙
+
+- 언어: **TypeScript**
+- 네이밍:
+  - 클래스/타입: `PascalCase`
+  - 변수/함수: `camelCase`
+  - 상수/환경변수: `UPPER_SNAKE_CASE`
+- 파일명:
+  - React 컴포넌트: `SomethingCard.tsx`
+  - Hook: `useSomething.ts`
+  - 서비스/유틸: `something.service.ts`, `something.util.ts`
+
+### 6.2 ESLint & Prettier
+
+- Next/Nest/Worker 모두 공통 ESLint/Prettier 설정 공유
+- Import 순서, 세미콜론, 따옴표 스타일 등 프로젝트 전역 통일
+- CI 또는 pre-commit 단계에서 lint/check 가능하도록 준비
+
+### 6.3 React/Next.js
+
+- 함수형 컴포넌트 + Hooks 사용
+- 컴포넌트는 가능한 **Presentational / Container 형태 분리**
+- API 호출은 `lib/api-client.ts`를 통해 수행 (중복 axios/fetch 사용 금지)
+- 서버 상태는 React Query/SWR 등으로 캐시 관리할 수 있으나,  
+  초기에는 단순 fetch + local state로 시작 후 단계적 도입
+
+### 6.4 NestJS
+
+- Controller: 입력/출력 책임 집중, 비즈니스 로직 최소화
+- Service: 실제 도메인 로직 위치
+- DTO: class-validator 또는 Zod로 검증
+- Prisma 쿼리는 Service/Repository 계층 내로 캡슐화
+
+---
+
+## 7. 데이터 모델 정의 (요약)
+
+> 실제 `schema.prisma`에서 조정 가능하나, 의미·관계는 유지해야 한다.
+
+- `User`
+  - id, email, passwordHash
+  - planType (nullable), expireAt (nullable)
+  - createdAt, updatedAt
+
+- `NaverSession`
+  - id, userId, profileDir, status, lastVerifiedAt
+  - createdAt, updatedAt
+
+- `Template`
+  - id, userId, cafeId, boardId
+  - name, subjectTemplate, contentTemplate
+  - createdAt, updatedAt
+
+- `Schedule`
+  - id, userId, templateId
+  - cronExpr, maxPostsPerDay, status
+  - lastRunAt, nextRunAt
+  - createdAt, updatedAt
+
+- `ManagedPost`
+  - id, userId, cafeId, boardId
+  - articleUrl, articleId, title
+  - createdAtRemote, status, lastSyncedAt, deletedAt
+  - createdAt, updatedAt
+
+- `PostRule` (2단계)
+  - id, userId, cafeId
+  - type (`MAX_COUNT` 등), value, enabled
+  - createdAt, updatedAt
+
+- `Job`
+  - id, type, userId
+  - payload(JSON), status, errorMessage
+  - createdAt, startedAt, finishedAt, updatedAt
+
+- `JobLog`
+  - id, jobId, level, message, meta(JSON), createdAt
+
+- (3단계) `Subscription` / `Payment` 등 결제/라이선스 테이블 추가 예정
+
+---
+
+## 8. 개발 정의 시 지켜야 할 규칙
+
+### 8.1 기능 범위 규칙
+
+1. **게시글 수정(EDIT) 기능은 현재 스펙에서 제외**
+   - 수정 기능은 명시적으로 요구될 때까지 구현하지 않는다.
+2. **네이버 비공개 API 사용 금지**
+   - 삭제/수정/목록 등의 기능은 Playwright를 통한 웹 UI 자동조작으로 처리
+3. **MVP → 2단계 → 3단계 순서 준수**
+   - 새 기능 요청 시 우선 현재 단계 범위에서 해결 가능한지 검토
+
+### 8.2 품질/유지보수 규칙
+
+1. **Type-first 개발**
+   - DTO, 응답 타입, Job payload는 항상 타입/스키마부터 정의
+2. **중복 최소화 & 재사용 극대화**
+   - 공통 로직/타입/유틸은 `packages/core` 또는 `common` 모듈로 이동
+3. **테스트 (핵심 로직 우선)**
+   - N개 유지 정책, 삭제 대상 선정, 스케줄 실행 여부 판단 등  
+     비즈니스 핵심 로직에는 단위 테스트를 점진적으로 추가
+4. **주석 및 문서 갱신**
+   - 복잡한 로직에는 한국어 주석으로 의도 설명
+   - 스펙 변경 시 `rule.md`, `기술개발.md` 문서를 함께 갱신하는 것을 원칙으로 함
+5. **Git 브랜치 전략**
+   - `main`: 배포 가능한 코드
+   - `dev` (선택): 통합 테스트용
+   - `feature/*`: 기능별 개발 브랜치 (예: `feature/schedule-crud`)
+
+---
+
+## 9. 요약
+
+- **카페매니저**는
+  - Next.js + NestJS + Prisma + Playwright를 사용하는
+  - 고급 B2B SaaS 아키텍처를 목표로 한다.
+- 이 문서의 목적은
+  - **기술 스택**, **구조 설계**, **데이터 모델**, **개발 규칙**을 명확히 정해
+  - 향후 기능 추가/변경이 있어도
+    - 코드 재사용성과 유지보수성을 최대화하는 데 있다.
+- 실제 구현 시에는
+  - 이 문서를 기반으로 Cursor/IDE에 세부 작업(스키마 작성, 모듈 생성, 컴포넌트 개발 등)을 지시한다.

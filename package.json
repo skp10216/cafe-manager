@@ -1,0 +1,40 @@
+{
+  "name": "cafe-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "카페매니저 - 네이버 카페 자동 포스팅 & 게시글 관리 SaaS",
+  "scripts": {
+    "dev:api": "pnpm --filter @cafe-manager/api dev",
+    "dev:web": "pnpm --filter @cafe-manager/web dev",
+    "dev:worker": "pnpm --filter @cafe-manager/worker dev",
+    "build:api": "pnpm --filter @cafe-manager/api build",
+    "build:web": "pnpm --filter @cafe-manager/web build",
+    "build:worker": "pnpm --filter @cafe-manager/worker build",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md}\""
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.1",
+    "@typescript-eslint/parser": "^6.13.1",
+    "eslint": "^8.55.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.0.1",
+    "prettier": "^3.1.0",
+    "prisma": "^5.7.0",
+    "typescript": "^5.3.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@8.12.0",
+  "dependencies": {
+    "@prisma/client": "5.22.0"
+  }
+}

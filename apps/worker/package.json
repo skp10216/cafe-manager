@@ -1,0 +1,26 @@
+{
+  "name": "@cafe-manager/worker",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "dev": "ts-node-dev --respawn --transpile-only src/main.ts",
+    "start": "node dist/main.js",
+    "lint": "eslint \"src/**/*.ts\" --fix"
+  },
+  "dependencies": {
+    "@cafe-manager/core": "workspace:*",
+    "@prisma/client": "^5.7.0",
+    "bullmq": "^5.1.0",
+    "dotenv": "^16.3.1",
+    "playwright": "^1.40.1",
+    "winston": "^3.11.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.3.2"
+  }
+}
+

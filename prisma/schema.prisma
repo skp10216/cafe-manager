@@ -1,0 +1,311 @@
+// ==============================================
+// 카페매니저 Prisma 스키마
+// ==============================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==============================================
+// 사용자 (User)
+// ==============================================
+
+/// 서비스 사용자
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  name         String?
+  
+  // 라이선스 관련 (3단계에서 활성화)
+  planType     PlanType?  @map("plan_type")
+  expireAt     DateTime?  @map("expire_at")
+  
+  createdAt    DateTime   @default(now()) @map("created_at")
+  updatedAt    DateTime   @updatedAt @map("updated_at")
+
+  // Relations
+  naverSessions NaverSession[]
+  templates     Template[]
+  schedules     Schedule[]
+  managedPosts  ManagedPost[]
+  jobs          Job[]
+
+  @@map("users")
+}
+
+/// 사용자 플랜 타입 (3단계에서 활성화)
+enum PlanType {
+  FREE
+  MONTHLY
+  YEARLY
+}
+
+// ==============================================
+// 네이버 세션 (NaverSession)
+// ==============================================
+
+/// 네이버 계정 세션 정보
+model NaverSession {
+  id             String              @id @default(cuid())
+  userId         String              @map("user_id")
+  naverId        String?             @map("naver_id")
+  profileDir     String              @map("profile_dir")
+  status         NaverSessionStatus  @default(PENDING)
+  lastVerifiedAt DateTime?           @map("last_verified_at")
+  errorMessage   String?             @map("error_message")
+  
+  createdAt      DateTime            @default(now()) @map("created_at")
+  updatedAt      DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("naver_sessions")
+}
+
+/// 네이버 세션 상태
+enum NaverSessionStatus {
+  PENDING  // 세션 초기화 대기 중
+  ACTIVE   // 활성 세션
+  EXPIRED  // 만료됨
+  ERROR    // 오류 발생
+}
+
+// ==============================================
+// 템플릿 (Template)
+// ==============================================
+
+/// 게시글 템플릿
+model Template {
+  id              String    @id @default(cuid())
+  userId          String    @map("user_id")
+  name            String
+  
+  // 대상 카페/게시판
+  cafeId          String    @map("cafe_id")
+  boardId         String    @map("board_id")
+  cafeName        String?   @map("cafe_name")
+  boardName       String?   @map("board_name")
+  
+  // 템플릿 내용
+  subjectTemplate String    @map("subject_template")
+  contentTemplate String    @map("content_template") @db.Text
+  
+  isActive        Boolean   @default(true) @map("is_active")
+  
+  createdAt       DateTime  @default(now()) @map("created_at")
+  updatedAt       DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schedules       Schedule[]
+
+  @@index([userId])
+  @@index([cafeId, boardId])
+  @@map("templates")
+}
+
+// ==============================================
+// 스케줄 (Schedule)
+// ==============================================
+
+/// 자동 포스팅 스케줄
+model Schedule {
+  id              String          @id @default(cuid())
+  userId          String          @map("user_id")
+  templateId      String          @map("template_id")
+  name            String
+  
+  // 스케줄 설정 (둘 중 하나 사용)
+  cronExpr        String?         @map("cron_expr")         // cron 표현식
+  intervalMinutes Int?            @map("interval_minutes")  // 분 단위 간격
+  
+  maxPostsPerDay  Int             @default(10) @map("max_posts_per_day")
+  status          ScheduleStatus  @default(PAUSED)
+  
+  // 실행 정보
+  lastRunAt       DateTime?       @map("last_run_at")
+  nextRunAt       DateTime?       @map("next_run_at")
+  todayPostCount  Int             @default(0) @map("today_post_count")
+  
+  createdAt       DateTime        @default(now()) @map("created_at")
+  updatedAt       DateTime        @updatedAt @map("updated_at")
+
+  // Relations
+  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template        Template        @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([templateId])
+  @@index([status, nextRunAt])
+  @@map("schedules")
+}
+
+/// 스케줄 상태
+enum ScheduleStatus {
+  ACTIVE  // 활성화됨
+  PAUSED  // 일시정지됨
+  ERROR   // 오류 발생
+}
+
+// ==============================================
+// 동기화된 게시글 (ManagedPost)
+// ==============================================
+
+/// 네이버 카페 "내가 쓴 글" 동기화 정보
+model ManagedPost {
+  id              String            @id @default(cuid())
+  userId          String            @map("user_id")
+  
+  // 게시글 위치
+  cafeId          String            @map("cafe_id")
+  boardId         String            @map("board_id")
+  articleId       String            @map("article_id")
+  articleUrl      String            @map("article_url")
+  
+  // 게시글 정보
+  title           String
+  status          ManagedPostStatus @default(ACTIVE)
+  createdAtRemote DateTime?         @map("created_at_remote")
+  
+  // 동기화 정보
+  lastSyncedAt    DateTime          @map("last_synced_at")
+  deletedAt       DateTime?         @map("deleted_at")
+  
+  createdAt       DateTime          @default(now()) @map("created_at")
+  updatedAt       DateTime          @updatedAt @map("updated_at")
+
+  // Relations
+  user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([cafeId, articleId])
+  @@index([userId])
+  @@index([cafeId, boardId])
+  @@index([status])
+  @@map("managed_posts")
+}
+
+/// 게시글 상태
+enum ManagedPostStatus {
+  ACTIVE   // 게시 중
+  DELETED  // 삭제됨
+  UNKNOWN  // 상태 불명
+}
+
+// ==============================================
+// 작업 (Job)
+// ==============================================
+
+/// 백그라운드 작업
+model Job {
+  id           String    @id @default(cuid())
+  type         JobType
+  userId       String    @map("user_id")
+  
+  // 작업 정보
+  payload      Json      @default("{}")
+  status       JobStatus @default(PENDING)
+  errorMessage String?   @map("error_message") @db.Text
+  
+  // 재시도 정보
+  attempts     Int       @default(0)
+  maxAttempts  Int       @default(3) @map("max_attempts")
+  
+  // 타임스탬프
+  createdAt    DateTime  @default(now()) @map("created_at")
+  startedAt    DateTime? @map("started_at")
+  finishedAt   DateTime? @map("finished_at")
+  updatedAt    DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  logs         JobLog[]
+
+  @@index([userId])
+  @@index([type, status])
+  @@index([createdAt])
+  @@map("jobs")
+}
+
+/// 작업 타입
+enum JobType {
+  INIT_SESSION  // 네이버 세션 초기화
+  CREATE_POST   // 게시글 작성
+  SYNC_POSTS    // 내가 쓴 글 동기화
+  DELETE_POST   // 게시글 삭제
+}
+
+/// 작업 상태
+enum JobStatus {
+  PENDING     // 대기 중
+  PROCESSING  // 처리 중
+  COMPLETED   // 완료
+  FAILED      // 실패
+  CANCELLED   // 취소됨
+}
+
+// ==============================================
+// 작업 로그 (JobLog)
+// ==============================================
+
+/// 작업 실행 로그
+model JobLog {
+  id        String      @id @default(cuid())
+  jobId     String      @map("job_id")
+  level     JobLogLevel
+  message   String      @db.Text
+  meta      Json?
+  
+  createdAt DateTime    @default(now()) @map("created_at")
+
+  // Relations
+  job       Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([createdAt])
+  @@map("job_logs")
+}
+
+/// 로그 레벨
+enum JobLogLevel {
+  DEBUG
+  INFO
+  WARN
+  ERROR
+}
+
+// ==============================================
+// 2단계: 게시글 유지 규칙 (PostRule) - 스키마만 정의
+// ==============================================
+
+/// 게시글 유지 규칙 (2단계에서 활성화)
+model PostRule {
+  id        String       @id @default(cuid())
+  userId    String       @map("user_id")
+  cafeId    String       @map("cafe_id")
+  boardId   String?      @map("board_id")  // null이면 카페 전체 적용
+  
+  type      PostRuleType
+  value     Int                            // MAX_COUNT일 경우 유지할 개수
+  enabled   Boolean      @default(true)
+  
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+
+  @@index([userId])
+  @@index([cafeId, boardId])
+  @@map("post_rules")
+}
+
+/// 규칙 타입
+enum PostRuleType {
+  MAX_COUNT  // 최대 N개 유지
+}
+
