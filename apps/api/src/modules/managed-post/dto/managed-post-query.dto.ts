@@ -20,3 +20,6 @@ export class ManagedPostQueryDto extends PaginationQueryDto {
   status?: ManagedPostStatus;
 }
 
+
+
+

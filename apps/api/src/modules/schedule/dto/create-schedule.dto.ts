@@ -38,3 +38,6 @@ export class CreateScheduleDto {
   maxPostsPerDay?: number = 10;
 }
 
+
+
+

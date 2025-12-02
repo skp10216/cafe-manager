@@ -8,6 +8,7 @@ import {
   NotFoundException,
   ForbiddenException,
   ConflictException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '@/common/prisma/prisma.service';
 import { JobService } from '../job/job.service';
@@ -16,6 +17,8 @@ import { randomUUID } from 'crypto';
 
 @Injectable()
 export class NaverSessionService {
+  private readonly logger = new Logger(NaverSessionService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly jobService: JobService
@@ -66,6 +69,10 @@ export class NaverSessionService {
    * 새 네이버 계정 연동 시작
    */
   async create(userId: string, dto: CreateNaverSessionDto) {
+    this.logger.log(
+      `네이버 세션 생성 시작: userId=${userId}, naverId=${dto.naverId ?? 'N/A'}`
+    );
+
     // 프로필 디렉토리 경로 생성 (고유한 UUID 사용)
     const profileDir = `naver-${userId}-${randomUUID().slice(0, 8)}`;
 
@@ -79,16 +86,45 @@ export class NaverSessionService {
       },
     });
 
+    this.logger.log(
+      `네이버 세션 DB 생성 완료: sessionId=${session.id}, profileDir=${profileDir}`
+    );
+
     // 세션 초기화 Job 생성
-    await this.jobService.createJob({
-      type: 'INIT_SESSION',
-      userId,
-      payload: {
-        sessionId: session.id,
-        profileDir,
-        naverId: dto.naverId,
-      },
-    });
+    try {
+      await this.jobService.createJob({
+        type: 'INIT_SESSION',
+        userId,
+        payload: {
+          sessionId: session.id,
+          profileDir,
+          naverId: dto.naverId,
+        },
+      });
+
+      this.logger.log(
+        `INIT_SESSION Job 생성 성공: sessionId=${session.id}, profileDir=${profileDir}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      this.logger.error(
+        `INIT_SESSION Job 생성 실패: sessionId=${session.id}, error=${message}`,
+        error instanceof Error ? error.stack : undefined
+      );
+
+      // Job 생성 실패 시 세션 상태를 ERROR로 업데이트하여 UI에서 바로 감지 가능하게 함
+      await this.prisma.naverSession.update({
+        where: { id: session.id },
+        data: {
+          status: 'ERROR',
+          errorMessage: `INIT_SESSION job 생성 실패: ${message}`,
+        },
+      });
+
+      // 예외를 다시 던져 프론트에 에러 전달
+      throw error;
+    }
 
     return session;
   }

@@ -219,3 +219,6 @@ export default function ScheduleDetailPage() {
   );
 }
 
+
+
+

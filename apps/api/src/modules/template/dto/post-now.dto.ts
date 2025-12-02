@@ -10,3 +10,6 @@ export class PostNowDto {
   variables?: Record<string, string>;
 }
 
+
+
+

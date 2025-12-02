@@ -12,3 +12,6 @@ export class ToggleScheduleDto {
   status: ScheduleStatus;
 }
 
+
+
+

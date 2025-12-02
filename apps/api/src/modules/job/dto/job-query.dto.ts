@@ -16,3 +16,6 @@ export class JobQueryDto extends PaginationQueryDto {
   status?: JobStatus;
 }
 
+
+
+

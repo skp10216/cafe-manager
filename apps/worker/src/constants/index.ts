@@ -38,3 +38,6 @@ export const NAVER_CAFE_URLS = {
     `https://cafe.naver.com/ca-fe/cafes/${cafeId}/menus/${boardId}/articles/write`,
 } as const;
 
+
+
+

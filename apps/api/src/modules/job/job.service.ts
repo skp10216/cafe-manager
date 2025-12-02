@@ -7,6 +7,7 @@ import {
     Injectable,
     NotFoundException,
     ForbiddenException,
+    Logger,
 } from '@nestjs/common';
 import { PrismaService } from '@/common/prisma/prisma.service';
 import { JobProducer } from './job.producer';
@@ -29,6 +30,8 @@ const DEFAULT_JOB_MAX_ATTEMPTS = 3; // core에 정의한 값과 맞춰주면 됨
 
 @Injectable()
 export class JobService {
+    private readonly logger = new Logger(JobService.name);
+
     constructor(
         private readonly prisma: PrismaService,
         private readonly jobProducer: JobProducer
@@ -152,7 +155,11 @@ export class JobService {
      * 새 작업 생성 및 큐에 추가
      */
     async createJob(input: CreateJobInput): Promise<Job> {
-        // DB에 작업 레코드 생성
+        this.logger.log(
+            `createJob 시작: type=${input.type}, userId=${input.userId}`
+        );
+
+        // 1) DB에 작업 레코드 생성
         const job = await this.prisma.job.create({
             data: {
                 type: input.type,
@@ -163,8 +170,37 @@ export class JobService {
             },
         });
 
-        // BullMQ 큐에 작업 추가
-        await this.jobProducer.addJob(job.id, input.type, input.payload);
+        this.logger.log(
+            `Job 레코드 생성 완료: jobId=${job.id}, type=${job.type}`
+        );
+
+        // 2) BullMQ 큐에 작업 추가
+        try {
+            await this.jobProducer.addJob(job.id, input.type, input.payload);
+            this.logger.log(
+                `BullMQ 큐 추가 성공: jobId=${job.id}, type=${job.type}`
+            );
+        } catch (error) {
+            const message =
+                error instanceof Error ? error.message : String(error);
+
+            this.logger.error(
+                `BullMQ 큐 추가 실패: jobId=${job.id}, type=${job.type}, error=${message}`,
+                error instanceof Error ? error.stack : undefined
+            );
+
+            // 큐 추가 실패 시 Job 상태를 FAILED로 마킹하여 UI에서 바로 확인 가능하게 함
+            await this.prisma.job.update({
+                where: { id: job.id },
+                data: {
+                    status: 'FAILED',
+                    errorMessage: `Queue enqueue failed: ${message}`,
+                },
+            });
+
+            // 예외를 다시 던져서 API 응답이 실패하도록 함
+            throw error;
+        }
 
         return job;
     }

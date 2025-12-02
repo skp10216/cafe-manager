@@ -12,3 +12,6 @@ export class UpdateTemplateDto extends PartialType(CreateTemplateDto) {
   isActive?: boolean;
 }
 
+
+
+
