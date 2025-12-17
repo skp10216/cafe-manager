@@ -10,7 +10,7 @@ import { Box, Typography, IconButton, Tooltip } from '@mui/material';
 import { Add, Edit, Delete, PlayArrow } from '@mui/icons-material';
 import AppCard from '@/components/common/AppCard';
 import AppButton from '@/components/common/AppButton';
-import AppTable from '@/components/common/AppTable';
+import AppTable, { Column } from '@/components/common/AppTable';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import { templateApi, Template } from '@/lib/api-client';
 
@@ -59,8 +59,8 @@ export default function TemplatesPage() {
     }
   };
 
-  const columns = [
-    { id: 'name', label: '템플릿 이름', minWidth: 150 },
+  const columns: Column<Template>[] = [
+    { id: 'name', field: 'name', label: '템플릿 이름', minWidth: 150 },
     {
       id: 'cafeName',
       label: '카페',
@@ -87,8 +87,7 @@ export default function TemplatesPage() {
       id: 'createdAt',
       label: '생성일',
       minWidth: 120,
-      render: (row: Template) =>
-        new Date(row.createdAt).toLocaleDateString('ko-KR'),
+      render: (row: Template) => new Date(row.createdAt).toLocaleDateString('ko-KR'),
     },
     {
       id: 'actions',
@@ -184,7 +183,3 @@ export default function TemplatesPage() {
     </Box>
   );
 }
-
-
-
-

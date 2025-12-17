@@ -1,12 +1,15 @@
 /**
  * Job Processor
  * BullMQ Job 타입별 처리 로직
+ *
+ * NaverAccount 기반 로그인 지원
  */
 
 import { Job as BullJob } from 'bullmq';
-import { PrismaClient, JobStatus } from '@prisma/client';
+import { PrismaClient, JobStatus, Prisma } from '@prisma/client';
 import { JobType } from '../constants';
 import { createLogger } from '../utils/logger';
+import { decrypt } from '../utils/crypto';
 import { BrowserManager } from '../playwright/browser-manager';
 import { NaverCafeClient } from '../playwright/naver-cafe-client';
 
@@ -49,6 +52,9 @@ export class JobProcessor {
         case 'INIT_SESSION':
           await this.handleInitSession(jobId, payload);
           break;
+        case 'VERIFY_SESSION':
+          await this.handleVerifySession(jobId, payload);
+          break;
         case 'CREATE_POST':
           await this.handleCreatePost(jobId, payload);
           break;
@@ -79,17 +85,45 @@ export class JobProcessor {
 
   /**
    * INIT_SESSION: 네이버 세션 초기화
+   * NaverAccount 정보를 사용하여 자동 로그인 시도
    */
   private async handleInitSession(
     jobId: string,
     payload: Record<string, unknown>
   ): Promise<void> {
-    const { sessionId, profileDir } = payload as {
-      sessionId: string;
+    const { naverAccountId, naverSessionId, profileDir, isReconnect } = payload as {
+      naverAccountId: string;
+      naverSessionId: string;
       profileDir: string;
+      isReconnect?: boolean;
     };
 
-    await this.addLog(jobId, 'INFO', `세션 초기화 시작: ${profileDir}`);
+    await this.addLog(
+      jobId,
+      'INFO',
+      `세션 초기화 시작: sessionId=${naverSessionId}, accountId=${naverAccountId}, reconnect=${!!isReconnect}`
+    );
+
+    // NaverAccount 조회
+    const account = await this.prisma.naverAccount.findUnique({
+      where: { id: naverAccountId },
+    });
+
+    if (!account) {
+      await this.updateSessionError(naverSessionId, '네이버 계정을 찾을 수 없습니다');
+      throw new Error(`NaverAccount not found: ${naverAccountId}`);
+    }
+
+    // 비밀번호 복호화
+    let password: string;
+    try {
+      password = decrypt(account.passwordEncrypted);
+    } catch (error) {
+      const errMsg = '비밀번호 복호화 실패';
+      await this.updateSessionError(naverSessionId, errMsg);
+      await this.updateAccountLoginStatus(naverAccountId, 'LOGIN_FAILED', errMsg);
+      throw new Error(errMsg);
+    }
 
     // 브라우저 컨텍스트 생성
     const context = await this.browserManager.getContext(profileDir);
@@ -100,40 +134,221 @@ export class JobProcessor {
       const isLoggedIn = await client.isLoggedIn();
 
       if (!isLoggedIn) {
-        // 로그인 페이지로 이동
-        await client.navigateToLogin();
-        await this.addLog(jobId, 'INFO', '네이버 로그인 페이지로 이동. 수동 로그인 대기 중...');
+        await this.addLog(jobId, 'INFO', `네이버 자동 로그인 시도: ${account.loginId}`);
 
-        // 로그인 완료 대기 (최대 5분)
-        const loginSuccess = await client.waitForLogin(300000);
+        // 자동 로그인 시도
+        const loginResult = await client.login(account.loginId, password);
 
-        if (!loginSuccess) {
-          // 세션 상태를 ERROR로 업데이트
-          await this.prisma.naverSession.update({
-            where: { id: sessionId },
-            data: {
-              status: 'ERROR',
-              errorMessage: '로그인 시간 초과',
-            },
-          });
-          throw new Error('네이버 로그인 시간 초과');
+        if (!loginResult.success) {
+          const errorMsg = loginResult.error || '로그인 실패';
+          await this.addLog(jobId, 'WARN', `자동 로그인 실패: ${errorMsg}`);
+          // 원인 파악을 위해 실패 시점 스크린샷을 남긴다.
+          await this.browserManager.saveScreenshot(profileDir, `init-session-login-failed-${jobId}`);
+
+          // CAPTCHA/2FA 등으로 자동 로그인 실패 시 수동 로그인 대기
+          if (
+            errorMsg.includes('CAPTCHA') ||
+            errorMsg.includes('2단계 인증') ||
+            errorMsg.includes('수동 로그인')
+          ) {
+            await this.addLog(
+              jobId,
+              'INFO',
+              '수동 로그인이 필요합니다. 브라우저에서 로그인을 완료해주세요. (5분 대기)'
+            );
+
+            // UI에서 "연동 진행 중..."만 보이지 않도록, 진행 상태 메시지를 세션에 기록한다.
+            // (상태는 PENDING 유지)
+            await this.prisma.naverSession.update({
+              where: { id: naverSessionId },
+              data: {
+                status: 'PENDING',
+                errorMessage:
+                  '수동 로그인이 필요합니다. Worker 브라우저에서 네이버 로그인(추가 인증/보안 화면 포함)을 완료해주세요.',
+              },
+            });
+
+            // 로그인 페이지로 이동 후 수동 로그인 대기
+            await client.navigateToLogin();
+            const manualLoginSuccess = await client.waitForLogin(300000); // 5분 대기
+
+            if (!manualLoginSuccess) {
+              await this.updateSessionError(naverSessionId, '수동 로그인 시간 초과');
+              await this.updateAccountLoginStatus(
+                naverAccountId,
+                'LOGIN_FAILED',
+                '수동 로그인 시간 초과'
+              );
+              throw new Error('네이버 수동 로그인 시간 초과');
+            }
+          } else {
+            // 비밀번호 오류 등 일반적인 로그인 실패
+            await this.updateSessionError(naverSessionId, errorMsg);
+            await this.updateAccountLoginStatus(naverAccountId, 'LOGIN_FAILED', errorMsg);
+            throw new Error(`네이버 로그인 실패: ${errorMsg}`);
+          }
         }
+
+        await this.addLog(jobId, 'INFO', '네이버 로그인 성공');
+      } else {
+        await this.addLog(jobId, 'INFO', '이미 로그인되어 있습니다');
       }
 
-      // 컨텍스트 저장
+      // 컨텍스트 저장 (세션 유지)
       await this.browserManager.saveContext(profileDir);
 
-      // 세션 상태를 ACTIVE로 업데이트
+      // 프로필(닉네임) 가져오기
+      let nickname: string | null = null;
+      try {
+        const profile = await client.getProfile();
+        nickname = profile?.nickname || null;
+        if (nickname) {
+          await this.addLog(jobId, 'INFO', `프로필 확인: 닉네임=${nickname}`);
+        }
+      } catch (profileError) {
+        await this.addLog(jobId, 'WARN', '프로필 정보 가져오기 실패 (세션은 유효)');
+      }
+
+      // 세션 상태를 ACTIVE로 업데이트 (닉네임 포함)
       await this.prisma.naverSession.update({
-        where: { id: sessionId },
+        where: { id: naverSessionId },
         data: {
           status: 'ACTIVE',
           lastVerifiedAt: new Date(),
           errorMessage: null,
+          naverNickname: nickname,
         },
       });
 
+      // 계정 로그인 상태 업데이트
+      await this.updateAccountLoginStatus(naverAccountId, 'ACTIVE', '로그인 성공');
+
       await this.addLog(jobId, 'INFO', '세션 초기화 완료');
+    } finally {
+      await client.close();
+    }
+  }
+
+  /**
+   * VERIFY_SESSION: 세션 검증 (실제 로그인 상태 + 닉네임 확인)
+   */
+  private async handleVerifySession(
+    jobId: string,
+    payload: Record<string, unknown>
+  ): Promise<void> {
+    const { naverSessionId } = payload as {
+      naverSessionId: string;
+    };
+
+    await this.addLog(jobId, 'INFO', `세션 검증 시작: sessionId=${naverSessionId}`);
+
+    // 세션 조회
+    const session = await this.prisma.naverSession.findUnique({
+      where: { id: naverSessionId },
+      include: { naverAccount: true },
+    });
+
+    if (!session) {
+      throw new Error(`Session not found: ${naverSessionId}`);
+    }
+
+    // 브라우저 컨텍스트 생성
+    const context = await this.browserManager.getContext(session.profileDir);
+    const client = new NaverCafeClient(context);
+
+    try {
+      // 세션 검증 수행
+      let result = await client.verifySession();
+
+      if (!result.isValid) {
+        // ✅ 자동 복구: 세션이 로그아웃된 경우, 저장된 계정 자격증명으로 1회 재로그인 시도
+        // - Worker 재시작/쿠키 만료/네이버 정책 변경 등으로 state.json이 무효화될 수 있음
+        if (result.error?.includes('로그인되어 있지 않습니다') && session.naverAccount) {
+          await this.addLog(jobId, 'WARN', '세션이 로그아웃 상태입니다. 자동 재로그인을 시도합니다.');
+
+          try {
+            const password = decrypt(session.naverAccount.passwordEncrypted);
+            const loginResult = await client.login(session.naverAccount.loginId, password);
+
+            if (!loginResult.success) {
+              const errorMsg = loginResult.error || '로그인 실패';
+
+              // CAPTCHA/2FA 등으로 자동 로그인 실패 시 수동 로그인 대기(VERIFY에서도 동일하게 지원)
+              if (
+                errorMsg.includes('CAPTCHA') ||
+                errorMsg.includes('2단계 인증') ||
+                errorMsg.includes('수동 로그인')
+              ) {
+                await this.addLog(
+                  jobId,
+                  'INFO',
+                  '수동 로그인이 필요합니다. 브라우저에서 로그인을 완료해주세요. (5분 대기)'
+                );
+                await client.navigateToLogin();
+                const manualLoginSuccess = await client.waitForLogin(300000);
+                if (!manualLoginSuccess) {
+                  throw new Error('수동 로그인 시간 초과');
+                }
+              } else {
+                throw new Error(errorMsg);
+              }
+            }
+
+            // 로그인 성공 후 컨텍스트 저장 + 재검증
+            await this.browserManager.saveContext(session.profileDir);
+            result = await client.verifySession();
+          } catch (reloginErr) {
+            const reloginMsg =
+              reloginErr instanceof Error ? reloginErr.message : String(reloginErr);
+            await this.addLog(jobId, 'WARN', `자동 재로그인 실패: ${reloginMsg}`);
+          }
+        }
+
+        // 세션 만료/오류 처리
+        if (!result.isValid) {
+          await this.prisma.naverSession.update({
+            where: { id: naverSessionId },
+            data: {
+              status: 'EXPIRED',
+              errorMessage: result.error || '세션이 만료되었습니다',
+            },
+          });
+          await this.addLog(jobId, 'WARN', `세션 검증 실패: ${result.error}`);
+          await this.browserManager.saveScreenshot(session.profileDir, `verify-session-invalid-${jobId}`);
+          throw new Error(result.error || '세션 검증 실패');
+        }
+      }
+
+      // 성공: 세션 상태 및 닉네임 업데이트
+      await this.prisma.naverSession.update({
+        where: { id: naverSessionId },
+        data: {
+          status: 'ACTIVE',
+          lastVerifiedAt: new Date(),
+          errorMessage: null,
+          naverNickname: result.profile?.nickname || null,
+        },
+      });
+
+      // 닉네임을 못 가져와도 로그인 자체는 유효할 수 있다.
+      // 다만, UI/운영에서 원인 파악이 가능하도록 스크린샷과 경고 로그를 남긴다.
+      if (!result.profile?.nickname) {
+        await this.addLog(
+          jobId,
+          'WARN',
+          '세션은 유효하지만 네이버 닉네임을 가져오지 못했습니다. (네이버 UI 변경/권한/페이지 구조 변화 가능)'
+        );
+        await this.browserManager.saveScreenshot(session.profileDir, `verify-session-no-nickname-${jobId}`);
+      }
+
+      // 컨텍스트 저장
+      await this.browserManager.saveContext(session.profileDir);
+
+      await this.addLog(
+        jobId,
+        'INFO',
+        `세션 검증 완료: 닉네임=${result.profile?.nickname || '(알 수 없음)'}`
+      );
     } finally {
       await client.close();
     }
@@ -146,27 +361,47 @@ export class JobProcessor {
     jobId: string,
     payload: Record<string, unknown>
   ): Promise<void> {
-    const { cafeId, boardId, title, content } = payload as {
+    const { cafeId, boardId, title, content, naverAccountId } = payload as {
       cafeId: string;
       boardId: string;
       title: string;
       content: string;
+      naverAccountId?: string;
     };
 
     await this.addLog(jobId, 'INFO', `게시글 작성 시작: ${cafeId}/${boardId}`);
 
-    // 작업 소유자의 활성 세션 찾기
+    // 작업 소유자 및 활성 세션 찾기
     const job = await this.prisma.job.findUnique({
       where: { id: jobId },
       select: { userId: true },
     });
 
-    const session = await this.prisma.naverSession.findFirst({
-      where: {
-        userId: job!.userId,
-        status: 'ACTIVE',
-      },
-    });
+    // naverAccountId가 지정되면 해당 계정의 세션 사용, 없으면 사용자의 아무 활성 세션
+    let session;
+    if (naverAccountId) {
+      session = await this.prisma.naverSession.findFirst({
+        where: {
+          naverAccountId,
+          status: 'ACTIVE',
+        },
+        include: {
+          naverAccount: true,
+        },
+      });
+    } else {
+      session = await this.prisma.naverSession.findFirst({
+        where: {
+          naverAccount: {
+            userId: job!.userId,
+          },
+          status: 'ACTIVE',
+        },
+        include: {
+          naverAccount: true,
+        },
+      });
+    }
 
     if (!session) {
       throw new Error('활성화된 네이버 세션이 없습니다');
@@ -212,22 +447,38 @@ export class JobProcessor {
     jobId: string,
     payload: Record<string, unknown>
   ): Promise<void> {
-    const { cafeId } = payload as { cafeId?: string };
+    const { cafeId, naverAccountId } = payload as {
+      cafeId?: string;
+      naverAccountId?: string;
+    };
 
     await this.addLog(jobId, 'INFO', '게시글 동기화 시작');
 
-    // 작업 소유자의 활성 세션 찾기
+    // 작업 소유자 및 활성 세션 찾기
     const job = await this.prisma.job.findUnique({
       where: { id: jobId },
       select: { userId: true },
     });
 
-    const session = await this.prisma.naverSession.findFirst({
-      where: {
-        userId: job!.userId,
-        status: 'ACTIVE',
-      },
-    });
+    // naverAccountId가 지정되면 해당 계정의 세션 사용
+    let session;
+    if (naverAccountId) {
+      session = await this.prisma.naverSession.findFirst({
+        where: {
+          naverAccountId,
+          status: 'ACTIVE',
+        },
+      });
+    } else {
+      session = await this.prisma.naverSession.findFirst({
+        where: {
+          naverAccount: {
+            userId: job!.userId,
+          },
+          status: 'ACTIVE',
+        },
+      });
+    }
 
     if (!session) {
       throw new Error('활성화된 네이버 세션이 없습니다');
@@ -238,7 +489,6 @@ export class JobProcessor {
 
     try {
       // 특정 카페 또는 모든 카페 동기화
-      // (현재는 단일 카페만 지원)
       if (cafeId) {
         const posts = await client.syncMyPosts(cafeId);
 
@@ -283,10 +533,42 @@ export class JobProcessor {
    */
   private async handleDeletePost(
     jobId: string,
-    payload: Record<string, unknown>
+    _payload: Record<string, unknown>
   ): Promise<void> {
     await this.addLog(jobId, 'WARN', '게시글 삭제 기능은 아직 구현되지 않았습니다');
     // TODO: 2단계에서 구현
+  }
+
+  /**
+   * 세션 에러 업데이트
+   */
+  private async updateSessionError(sessionId: string, errorMessage: string) {
+    await this.prisma.naverSession.update({
+      where: { id: sessionId },
+      data: {
+        status: 'ERROR',
+        errorMessage,
+      },
+    });
+  }
+
+  /**
+   * NaverAccount 로그인 상태 업데이트
+   */
+  private async updateAccountLoginStatus(
+    accountId: string,
+    status: 'ACTIVE' | 'LOGIN_FAILED',
+    message: string
+  ) {
+    await this.prisma.naverAccount.update({
+      where: { id: accountId },
+      data: {
+        status,
+        lastLoginAt: new Date(),
+        lastLoginStatus: status === 'ACTIVE' ? 'SUCCESS' : 'FAILED',
+        lastLoginError: status === 'LOGIN_FAILED' ? message : null,
+      },
+    });
   }
 
   /**
@@ -320,20 +602,18 @@ export class JobProcessor {
     jobId: string,
     level: 'DEBUG' | 'INFO' | 'WARN' | 'ERROR',
     message: string,
-    meta?: Record<string, unknown>
+    meta?: Prisma.InputJsonValue
   ) {
     await this.prisma.jobLog.create({
       data: {
         jobId,
         level,
         message,
-        meta: meta || undefined,
+        meta: meta ?? undefined,
       },
     });
 
     // 콘솔에도 출력
-    const logFn = level === 'ERROR' ? logger.error : level === 'WARN' ? logger.warn : logger.info;
-    logFn.call(logger, `[Job:${jobId}] ${message}`);
+    logger.log(level.toLowerCase(), `[Job:${jobId}] ${message}`);
   }
 }
-

@@ -13,7 +13,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import AppCard from '@/components/common/AppCard';
 import AppButton from '@/components/common/AppButton';
-import { templateApi, Template, ApiError } from '@/lib/api-client';
+import { templateApi, ApiError } from '@/lib/api-client';
 
 const templateSchema = z.object({
   name: z.string().min(1, '템플릿 이름을 입력하세요'),
@@ -33,7 +33,6 @@ export default function TemplateDetailPage() {
   const id = params.id as string;
   const isNew = id === 'new';
 
-  const [loading, setLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,7 +53,6 @@ export default function TemplateDetailPage() {
 
   const loadTemplate = async () => {
     try {
-      setLoading(true);
       const template = await templateApi.get(id);
       reset({
         name: template.name,
@@ -67,8 +65,6 @@ export default function TemplateDetailPage() {
       });
     } catch (error) {
       setError('템플릿을 불러올 수 없습니다');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -149,11 +145,7 @@ export default function TemplateDetailPage() {
                   />
                 </Grid>
                 <Grid item xs={6}>
-                  <TextField
-                    {...register('cafeName')}
-                    label="카페 이름 (선택)"
-                    fullWidth
-                  />
+                  <TextField {...register('cafeName')} label="카페 이름 (선택)" fullWidth />
                 </Grid>
                 <Grid item xs={6}>
                   <TextField
@@ -165,11 +157,7 @@ export default function TemplateDetailPage() {
                   />
                 </Grid>
                 <Grid item xs={6}>
-                  <TextField
-                    {...register('boardName')}
-                    label="게시판 이름 (선택)"
-                    fullWidth
-                  />
+                  <TextField {...register('boardName')} label="게시판 이름 (선택)" fullWidth />
                 </Grid>
               </Grid>
             </AppCard>
@@ -202,11 +190,7 @@ export default function TemplateDetailPage() {
           <Grid item xs={12}>
             <Box sx={{ display: 'flex', gap: 2, justifyContent: 'flex-end' }}>
               {!isNew && (
-                <AppButton
-                  variant="outlined"
-                  startIcon={<PlayArrow />}
-                  onClick={handlePostNow}
-                >
+                <AppButton variant="outlined" startIcon={<PlayArrow />} onClick={handlePostNow}>
                   지금 게시
                 </AppButton>
               )}
@@ -225,7 +209,3 @@ export default function TemplateDetailPage() {
     </Box>
   );
 }
-
-
-
-

@@ -10,7 +10,7 @@ import { Box, Typography, IconButton, Tooltip, Switch } from '@mui/material';
 import { Add, Edit, Delete } from '@mui/icons-material';
 import AppCard from '@/components/common/AppCard';
 import AppButton from '@/components/common/AppButton';
-import AppTable from '@/components/common/AppTable';
+import AppTable, { Column } from '@/components/common/AppTable';
 import StatusChip from '@/components/common/StatusChip';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import { scheduleApi, Schedule } from '@/lib/api-client';
@@ -61,8 +61,8 @@ export default function SchedulesPage() {
     }
   };
 
-  const columns = [
-    { id: 'name', label: '스케줄 이름', minWidth: 150 },
+  const columns: Column<Schedule>[] = [
+    { id: 'name', field: 'name', label: '스케줄 이름', minWidth: 150 },
     {
       id: 'template',
       label: '템플릿',
@@ -90,9 +90,7 @@ export default function SchedulesPage() {
       label: '다음 실행',
       minWidth: 150,
       render: (row: Schedule) =>
-        row.nextRunAt
-          ? new Date(row.nextRunAt).toLocaleString('ko-KR')
-          : '-',
+        row.nextRunAt ? new Date(row.nextRunAt).toLocaleString('ko-KR') : '-',
     },
     {
       id: 'status',
@@ -191,7 +189,3 @@ export default function SchedulesPage() {
     </Box>
   );
 }
-
-
-
-

@@ -23,7 +23,8 @@ module.exports = {
     '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
 
     // Prettier 통합
-    'prettier/prettier': 'error',
+    // Windows 개발 환경(CRLF)에서도 빌드/CI가 깨지지 않도록 endOfLine을 auto로 고정
+    'prettier/prettier': ['error', { endOfLine: 'auto' }],
 
     // 일반 규칙
     'no-console': ['warn', { allow: ['warn', 'error'] }],
@@ -31,6 +32,9 @@ module.exports = {
   },
   ignorePatterns: ['node_modules/', 'dist/', '.next/', '*.js'],
 };
+
+
+
 
 
 

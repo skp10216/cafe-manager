@@ -30,7 +30,9 @@ model User {
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
   // Relations
-  naverSessions NaverSession[]
+  naverAccounts NaverAccount[]   // User 1:N NaverAccount
+  naverOauthAccounts NaverOAuthAccount[] // User 1:N NaverOAuthAccount (OAuth 기반 연결)
+  naverOauthStates   NaverOAuthState[]   // OAuth state (CSRF 방지/콜백 검증)
   templates     Template[]
   schedules     Schedule[]
   managedPosts  ManagedPost[]
@@ -47,27 +49,119 @@ enum PlanType {
 }
 
 // ==============================================
-// 네이버 세션 (NaverSession)
+// 네이버 계정 (NaverAccount) - User와 네이버 계정 분리
 // ==============================================
 
-/// 네이버 계정 세션 정보
-model NaverSession {
-  id             String              @id @default(cuid())
-  userId         String              @map("user_id")
-  naverId        String?             @map("naver_id")
-  profileDir     String              @map("profile_dir")
-  status         NaverSessionStatus  @default(PENDING)
-  lastVerifiedAt DateTime?           @map("last_verified_at")
-  errorMessage   String?             @map("error_message")
+/// 네이버 계정 정보 (네이버 로그인 자격 증명)
+model NaverAccount {
+  id                String              @id @default(cuid())
+  userId            String              @map("user_id")
+  loginId           String              @map("login_id")          // 네이버 로그인 아이디
+  passwordEncrypted String              @map("password_encrypted") // 암호화된 비밀번호
+  displayName       String?             @map("display_name")       // 표시 이름 (선택)
   
-  createdAt      DateTime            @default(now()) @map("created_at")
-  updatedAt      DateTime            @updatedAt @map("updated_at")
+  status            NaverAccountStatus  @default(ACTIVE)
+  lastLoginAt       DateTime?           @map("last_login_at")
+  lastLoginStatus   String?             @map("last_login_status")  // 마지막 로그인 결과
+  lastLoginError    String?             @map("last_login_error")   // 마지막 로그인 에러
+  
+  createdAt         DateTime            @default(now()) @map("created_at")
+  updatedAt         DateTime            @updatedAt @map("updated_at")
 
   // Relations
-  user           User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user              User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  sessions          NaverSession[]
 
   @@index([userId])
+  @@map("naver_accounts")
+}
+
+/// 네이버 계정 상태
+enum NaverAccountStatus {
+  ACTIVE       // 활성 계정
+  LOGIN_FAILED // 로그인 실패 (비밀번호 변경 등)
+  DISABLED     // 비활성화됨
+}
+
+// ==============================================
+// 네이버 세션 (NaverSession) - NaverAccount 기반
+// ==============================================
+
+/// 네이버 계정 세션 정보 (브라우저 세션/쿠키)
+model NaverSession {
+  id              String              @id @default(cuid())
+  naverAccountId  String              @map("naver_account_id")  // NaverAccount 참조
+  profileDir      String              @map("profile_dir")       // Playwright 프로필 디렉토리
+  status          NaverSessionStatus  @default(PENDING)
+  lastVerifiedAt  DateTime?           @map("last_verified_at")
+  errorMessage    String?             @map("error_message")
+  naverNickname   String?             @map("naver_nickname")    // 검증된 네이버 닉네임
+  
+  createdAt       DateTime            @default(now()) @map("created_at")
+  updatedAt       DateTime            @updatedAt @map("updated_at")
+
+  // Relations
+  naverAccount    NaverAccount        @relation(fields: [naverAccountId], references: [id], onDelete: Cascade)
+
+  @@index([naverAccountId])
   @@map("naver_sessions")
+}
+
+// ==============================================
+// 네이버 OAuth 계정 (NaverOAuthAccount)
+// - 공식 네이버 로그인(OAuth2)로 연결한 계정 정보
+// - "ID/PW 저장" 없이도 네이버 프로필/오픈 API 호출에 사용 가능
+// ==============================================
+
+model NaverOAuthAccount {
+  id                   String   @id @default(cuid())
+  userId               String   @map("user_id")
+
+  // 네이버 사용자 식별자 (프로필 API 응답의 response.id)
+  naverUserId           String   @map("naver_user_id")
+
+  // 프로필(가능한 범위)
+  email                String?
+  nickname             String?
+  name                 String?
+  profileImageUrl      String?  @map("profile_image_url")
+
+  // 토큰 (암호화 저장 권장)
+  accessTokenEncrypted String   @map("access_token_encrypted")
+  refreshTokenEncrypted String? @map("refresh_token_encrypted")
+  tokenType            String?  @map("token_type")          // bearer 등
+  tokenExpiresAt       DateTime? @map("token_expires_at")
+
+  connectedAt          DateTime @default(now()) @map("connected_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, naverUserId])
+  @@index([userId])
+  @@map("naver_oauth_accounts")
+}
+
+// ==============================================
+// 네이버 OAuth state (NaverOAuthState)
+// - CSRF 방지 및 콜백 연동 검증용 (단발성)
+// ==============================================
+
+model NaverOAuthState {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  state     String   @unique
+  expiresAt DateTime @map("expires_at")
+  usedAt    DateTime? @map("used_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("naver_oauth_states")
 }
 
 /// 네이버 세션 상태
@@ -236,10 +330,11 @@ model Job {
 
 /// 작업 타입
 enum JobType {
-  INIT_SESSION  // 네이버 세션 초기화
-  CREATE_POST   // 게시글 작성
-  SYNC_POSTS    // 내가 쓴 글 동기화
-  DELETE_POST   // 게시글 삭제
+  INIT_SESSION    // 네이버 세션 초기화
+  VERIFY_SESSION  // 세션 검증 (로그인 상태 + 닉네임 확인)
+  CREATE_POST     // 게시글 작성
+  SYNC_POSTS      // 내가 쓴 글 동기화
+  DELETE_POST     // 게시글 삭제
 }
 
 /// 작업 상태

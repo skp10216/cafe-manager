@@ -15,11 +15,7 @@ import {
   MenuItem,
   Divider,
 } from '@mui/material';
-import {
-  Menu as MenuIcon,
-  AccountCircle,
-  Logout,
-} from '@mui/icons-material';
+import { Menu as MenuIcon, AccountCircle, Logout } from '@mui/icons-material';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { clearAuthToken } from '@/lib/api-client';
@@ -87,8 +83,7 @@ export default function AppBar({ drawerWidth, onMenuClick }: AppBarProps) {
             anchorOrigin={{ horizontal: 'right', vertical: 'bottom' }}
           >
             <MenuItem onClick={() => router.push('/settings')}>
-              <AccountCircle sx={{ mr: 1 }} />
-              내 정보
+              <AccountCircle sx={{ mr: 1 }} />내 정보
             </MenuItem>
             <Divider />
             <MenuItem onClick={handleLogout}>
@@ -101,7 +96,5 @@ export default function AppBar({ drawerWidth, onMenuClick }: AppBarProps) {
     </MuiAppBar>
   );
 }
-
-
 
 

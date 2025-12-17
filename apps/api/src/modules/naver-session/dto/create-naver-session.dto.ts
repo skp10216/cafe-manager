@@ -1,15 +1,12 @@
 /**
  * 네이버 세션 생성 DTO
+ * naverAccountId를 기준으로 세션 생성
  */
 
-import { IsString, IsOptional } from 'class-validator';
+import { IsString } from 'class-validator';
 
 export class CreateNaverSessionDto {
-  @IsOptional()
+  /** 세션을 생성할 네이버 계정 ID */
   @IsString()
-  naverId?: string;
+  naverAccountId: string;
 }
-
-
-
-

@@ -16,7 +16,7 @@ import {
 interface ConfirmDialogProps {
   open: boolean;
   title: string;
-  message: string;
+  message: React.ReactNode; // JSX 지원을 위해 ReactNode로 변경
   confirmText?: string;
   cancelText?: string;
   confirmColor?: 'primary' | 'error' | 'warning';
@@ -35,12 +35,7 @@ export default function ConfirmDialog({
   onCancel,
 }: ConfirmDialogProps) {
   return (
-    <Dialog
-      open={open}
-      onClose={onCancel}
-      maxWidth="xs"
-      fullWidth
-    >
+    <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth>
       <DialogTitle>{title}</DialogTitle>
       <DialogContent>
         <DialogContentText>{message}</DialogContentText>
@@ -56,7 +51,3 @@ export default function ConfirmDialog({
     </Dialog>
   );
 }
-
-
-
-

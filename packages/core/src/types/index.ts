@@ -21,17 +21,38 @@ export interface User {
 }
 
 // ============================================
+// 네이버 계정 관련 타입
+// ============================================
+
+/** 네이버 계정 상태 */
+export type NaverAccountStatus = 'ACTIVE' | 'LOGIN_FAILED' | 'DISABLED';
+
+/** 네이버 계정 정보 (로그인 자격 증명) */
+export interface NaverAccount {
+  id: string;
+  userId: string;
+  loginId: string;                    // 네이버 로그인 아이디
+  passwordEncrypted: string;          // 암호화된 비밀번호
+  displayName: string | null;         // 표시 이름
+  status: NaverAccountStatus;
+  lastLoginAt: Date | null;
+  lastLoginStatus: string | null;
+  lastLoginError: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// ============================================
 // 네이버 세션 관련 타입
 // ============================================
 
 /** 네이버 세션 상태 */
 export type NaverSessionStatus = 'PENDING' | 'ACTIVE' | 'EXPIRED' | 'ERROR';
 
-/** 네이버 세션 정보 */
+/** 네이버 세션 정보 (브라우저 세션/쿠키) */
 export interface NaverSession {
   id: string;
-  userId: string;
-  naverId: string | null;
+  naverAccountId: string;             // NaverAccount 참조
   profileDir: string;
   status: NaverSessionStatus;
   lastVerifiedAt: Date | null;

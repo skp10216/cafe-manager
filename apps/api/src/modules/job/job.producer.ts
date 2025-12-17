@@ -29,6 +29,15 @@ export class JobProducer {
     );
 
     try {
+      // 로그인/세션 계열 작업은 외부(네이버) 요인으로 실패할 가능성이 높고,
+      // 같은 입력으로 재시도해도 성공 확률이 낮은 케이스(캡차/추가인증/보안경고)가 많다.
+      // -> 과도한 재시도로 "무한 반복처럼 보이는" 현상을 줄이기 위해 attempts를 낮춘다.
+      const attemptsByType: Record<string, number> = {
+        INIT_SESSION: 1,
+        VERIFY_SESSION: 1,
+      };
+      const attempts = attemptsByType[type] ?? 3;
+
       await this.cafeJobsQueue.add(
         type, // Job 이름 (타입)
         {
@@ -38,7 +47,7 @@ export class JobProducer {
         },
         {
           jobId, // BullMQ 내부 ID로 DB ID 사용
-          attempts: 3,
+          attempts,
           backoff: {
             type: 'exponential',
             delay: 5000, // 5초부터 시작하여 지수적으로 증가

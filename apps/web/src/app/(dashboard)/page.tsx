@@ -6,14 +6,7 @@
 
 import { useEffect, useState } from 'react';
 import { Grid, Typography, Box, Skeleton } from '@mui/material';
-import {
-  TrendingUp,
-  CheckCircle,
-  Error,
-  Schedule,
-  Article,
-  Sync,
-} from '@mui/icons-material';
+import { TrendingUp, CheckCircle, Error, Schedule, Article } from '@mui/icons-material';
 import AppCard from '@/components/common/AppCard';
 import AppButton from '@/components/common/AppButton';
 import StatusChip from '@/components/common/StatusChip';
@@ -29,12 +22,14 @@ interface DashboardStats {
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [recentJobs, setRecentJobs] = useState<Array<{
-    id: string;
-    type: string;
-    status: string;
-    createdAt: string;
-  }>>([]);
+  const [recentJobs, setRecentJobs] = useState<
+    Array<{
+      id: string;
+      type: string;
+      status: string;
+      createdAt: string;
+    }>
+  >([]);
   const [loading, setLoading] = useState(true);
 
   const loadDashboard = async () => {
@@ -178,11 +173,7 @@ export default function DashboardPage() {
                 <Typography color="text.secondary">연동된 계정 없음</Typography>
               )}
               <Box sx={{ mt: 2 }}>
-                <AppButton
-                  variant="outlined"
-                  size="small"
-                  href="/settings"
-                >
+                <AppButton variant="outlined" size="small" href="/settings">
                   연동 관리
                 </AppButton>
               </Box>
@@ -195,11 +186,7 @@ export default function DashboardPage() {
           <AppCard
             title="최근 작업"
             action={
-              <AppButton
-                variant="text"
-                size="small"
-                href="/logs"
-              >
+              <AppButton variant="text" size="small" href="/logs">
                 전체 보기
               </AppButton>
             }
@@ -231,9 +218,7 @@ export default function DashboardPage() {
                   >
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                       <Schedule sx={{ color: 'text.secondary', fontSize: 18 }} />
-                      <Typography variant="body2">
-                        {getJobTypeLabel(job.type)}
-                      </Typography>
+                      <Typography variant="body2">{getJobTypeLabel(job.type)}</Typography>
                     </Box>
                     <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
                       <Typography variant="caption" color="text.secondary">
@@ -251,7 +236,3 @@ export default function DashboardPage() {
     </Box>
   );
 }
-
-
-
-

@@ -1,6 +1,6 @@
 /**
  * NaverSession 서비스
- * 네이버 세션 비즈니스 로직
+ * 네이버 세션 비즈니스 로직 (NaverAccount 기반)
  */
 
 import {
@@ -26,10 +26,25 @@ export class NaverSessionService {
 
   /**
    * 사용자의 모든 네이버 세션 조회
+   * NaverAccount 정보도 함께 반환
    */
   async findAllByUserId(userId: string) {
     return this.prisma.naverSession.findMany({
-      where: { userId },
+      where: {
+        naverAccount: {
+          userId,
+        },
+      },
+      include: {
+        naverAccount: {
+          select: {
+            id: true,
+            loginId: true,
+            displayName: true,
+            status: true,
+          },
+        },
+      },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -40,13 +55,25 @@ export class NaverSessionService {
   async findOne(id: string, userId: string) {
     const session = await this.prisma.naverSession.findUnique({
       where: { id },
+      include: {
+        naverAccount: {
+          select: {
+            id: true,
+            userId: true,
+            loginId: true,
+            displayName: true,
+            status: true,
+          },
+        },
+      },
     });
 
     if (!session) {
       throw new NotFoundException('네이버 세션을 찾을 수 없습니다');
     }
 
-    if (session.userId !== userId) {
+    // 소유권 검사: 세션의 NaverAccount가 해당 사용자의 것인지 확인
+    if (session.naverAccount.userId !== userId) {
       throw new ForbiddenException('접근 권한이 없습니다');
     }
 
@@ -59,30 +86,92 @@ export class NaverSessionService {
   async findActiveSession(userId: string) {
     return this.prisma.naverSession.findFirst({
       where: {
-        userId,
+        naverAccount: {
+          userId,
+        },
+        status: 'ACTIVE',
+      },
+      include: {
+        naverAccount: {
+          select: {
+            id: true,
+            loginId: true,
+            displayName: true,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * 특정 NaverAccount의 활성 세션 조회
+   */
+  async findActiveSessionByAccountId(naverAccountId: string) {
+    return this.prisma.naverSession.findFirst({
+      where: {
+        naverAccountId,
         status: 'ACTIVE',
       },
     });
   }
 
   /**
-   * 새 네이버 계정 연동 시작
+   * 새 네이버 세션 연동 시작
+   * NaverAccount ID를 기반으로 세션 생성
    */
   async create(userId: string, dto: CreateNaverSessionDto) {
     this.logger.log(
-      `네이버 세션 생성 시작: userId=${userId}, naverId=${dto.naverId ?? 'N/A'}`
+      `네이버 세션 생성 시작: userId=${userId}, naverAccountId=${dto.naverAccountId}`
     );
 
-    // 프로필 디렉토리 경로 생성 (고유한 UUID 사용)
-    const profileDir = `naver-${userId}-${randomUUID().slice(0, 8)}`;
+    // NaverAccount 소유권 확인
+    const account = await this.prisma.naverAccount.findUnique({
+      where: { id: dto.naverAccountId },
+    });
+
+    if (!account) {
+      throw new NotFoundException('네이버 계정을 찾을 수 없습니다');
+    }
+
+    if (account.userId !== userId) {
+      throw new ForbiddenException('해당 네이버 계정에 대한 접근 권한이 없습니다');
+    }
+
+    // 이미 PENDING/ACTIVE 세션이 있는지 확인
+    const existingSession = await this.prisma.naverSession.findFirst({
+      where: {
+        naverAccountId: dto.naverAccountId,
+        status: { in: ['PENDING', 'ACTIVE'] },
+      },
+    });
+
+    if (existingSession) {
+      if (existingSession.status === 'PENDING') {
+        throw new ConflictException('이미 세션 연동이 진행 중입니다');
+      }
+      if (existingSession.status === 'ACTIVE') {
+        throw new ConflictException('이미 활성화된 세션이 있습니다');
+      }
+    }
+
+    // 프로필 디렉토리 경로 생성 (계정 ID + UUID)
+    const profileDir = `naver-${account.loginId}-${randomUUID().slice(0, 8)}`;
 
     // 세션 레코드 생성 (PENDING 상태)
     const session = await this.prisma.naverSession.create({
       data: {
-        userId,
-        naverId: dto.naverId,
+        naverAccountId: dto.naverAccountId,
         profileDir,
         status: 'PENDING',
+      },
+      include: {
+        naverAccount: {
+          select: {
+            id: true,
+            loginId: true,
+            displayName: true,
+          },
+        },
       },
     });
 
@@ -96,14 +185,14 @@ export class NaverSessionService {
         type: 'INIT_SESSION',
         userId,
         payload: {
-          sessionId: session.id,
+          naverAccountId: dto.naverAccountId,
+          naverSessionId: session.id,
           profileDir,
-          naverId: dto.naverId,
         },
       });
 
       this.logger.log(
-        `INIT_SESSION Job 생성 성공: sessionId=${session.id}, profileDir=${profileDir}`
+        `INIT_SESSION Job 생성 성공: sessionId=${session.id}, naverAccountId=${dto.naverAccountId}`
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -113,7 +202,7 @@ export class NaverSessionService {
         error instanceof Error ? error.stack : undefined
       );
 
-      // Job 생성 실패 시 세션 상태를 ERROR로 업데이트하여 UI에서 바로 감지 가능하게 함
+      // Job 생성 실패 시 세션 상태를 ERROR로 업데이트
       await this.prisma.naverSession.update({
         where: { id: session.id },
         data: {
@@ -122,7 +211,6 @@ export class NaverSessionService {
         },
       });
 
-      // 예외를 다시 던져 프론트에 에러 전달
       throw error;
     }
 
@@ -165,14 +253,43 @@ export class NaverSessionService {
       type: 'INIT_SESSION',
       userId,
       payload: {
-        sessionId: id,
+        naverAccountId: session.naverAccountId,
+        naverSessionId: id,
         profileDir: session.profileDir,
-        naverId: session.naverId,
         isReconnect: true,
       },
     });
 
     return this.findOne(id, userId);
+  }
+
+  /**
+   * 네이버 세션 검증
+   * 실제 로그인 상태와 닉네임을 확인하는 Job 생성
+   */
+  async verify(id: string, userId: string) {
+    const session = await this.findOne(id, userId);
+
+    if (session.status === 'PENDING') {
+      throw new ConflictException('세션 연동이 진행 중입니다');
+    }
+
+    this.logger.log(`세션 검증 시작: sessionId=${id}`);
+
+    // 검증 Job 생성
+    await this.jobService.createJob({
+      type: 'VERIFY_SESSION',
+      userId,
+      payload: {
+        naverSessionId: id,
+        profileDir: session.profileDir,
+      },
+    });
+
+    return {
+      message: '세션 검증이 시작되었습니다',
+      sessionId: id,
+    };
   }
 
   /**
@@ -183,7 +300,6 @@ export class NaverSessionService {
     status: 'ACTIVE' | 'EXPIRED' | 'ERROR',
     options?: {
       errorMessage?: string;
-      naverId?: string;
     }
   ) {
     return this.prisma.naverSession.update({
@@ -191,10 +307,8 @@ export class NaverSessionService {
       data: {
         status,
         errorMessage: options?.errorMessage || null,
-        naverId: options?.naverId,
         lastVerifiedAt: status === 'ACTIVE' ? new Date() : undefined,
       },
     });
   }
 }
-

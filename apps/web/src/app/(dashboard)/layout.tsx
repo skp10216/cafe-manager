@@ -9,23 +9,33 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Box, CircularProgress } from '@mui/material';
 import AppLayout from '@/components/layout/AppLayout';
+import { authApi, clearAuthToken } from '@/lib/api-client';
 
-export default function DashboardLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // 클라이언트에서만 토큰 확인
-    const token = localStorage.getItem('accessToken');
-    if (!token) {
-      router.push('/login');
-    } else {
-      setIsLoading(false);
-    }
+    // ✅ 토큰 존재 여부만 보지 말고 실제로 인증이 유효한지 확인한다.
+    // - accessToken 만료 시: api-client가 refresh 후 재시도
+    // - refresh도 실패 시: 토큰 정리 후 로그인으로 이동
+    const run = async () => {
+      const token = localStorage.getItem('accessToken');
+      if (!token) {
+        router.push('/login');
+        return;
+      }
+
+      try {
+        await authApi.me();
+        setIsLoading(false);
+      } catch {
+        clearAuthToken();
+        router.push('/login');
+      }
+    };
+
+    run();
   }, [router]);
 
   if (isLoading) {
@@ -45,7 +55,3 @@ export default function DashboardLayout({
 
   return <AppLayout>{children}</AppLayout>;
 }
-
-
-
-

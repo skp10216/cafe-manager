@@ -6,7 +6,7 @@
  */
 
 import { useState } from 'react';
-import { Box, useMediaQuery, useTheme } from '@mui/material';
+import { Box } from '@mui/material';
 import AppBar from './AppBar';
 import NavDrawer from './NavDrawer';
 
@@ -17,8 +17,6 @@ interface AppLayoutProps {
 }
 
 export default function AppLayout({ children }: AppLayoutProps) {
-  const theme = useTheme();
-  const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const [mobileOpen, setMobileOpen] = useState(false);
 
   const handleDrawerToggle = () => {
@@ -28,17 +26,10 @@ export default function AppLayout({ children }: AppLayoutProps) {
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
       {/* 앱바 */}
-      <AppBar
-        drawerWidth={DRAWER_WIDTH}
-        onMenuClick={handleDrawerToggle}
-      />
+      <AppBar drawerWidth={DRAWER_WIDTH} onMenuClick={handleDrawerToggle} />
 
       {/* 네비게이션 드로어 */}
-      <NavDrawer
-        width={DRAWER_WIDTH}
-        mobileOpen={mobileOpen}
-        onClose={handleDrawerToggle}
-      />
+      <NavDrawer width={DRAWER_WIDTH} mobileOpen={mobileOpen} onClose={handleDrawerToggle} />
 
       {/* 메인 콘텐츠 */}
       <Box
@@ -58,7 +49,3 @@ export default function AppLayout({ children }: AppLayoutProps) {
     </Box>
   );
 }
-
-
-
-

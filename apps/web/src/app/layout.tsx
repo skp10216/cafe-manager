@@ -12,11 +12,7 @@ export const metadata: Metadata = {
   description: '네이버 카페 자동 포스팅 & 게시글 관리 솔루션',
 };
 
-export default function RootLayout({
-  children,
-}: {
-  children: React.ReactNode;
-}) {
+export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="ko">
       <body>
@@ -27,7 +23,5 @@ export default function RootLayout({
     </html>
   );
 }
-
-
 
 

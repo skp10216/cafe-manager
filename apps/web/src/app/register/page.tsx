@@ -6,30 +6,24 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  Box,
-  Card,
-  CardContent,
-  TextField,
-  Typography,
-  Alert,
-  Link,
-} from '@mui/material';
+import { Box, Card, CardContent, TextField, Typography, Alert, Link } from '@mui/material';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import AppButton from '@/components/common/AppButton';
 import { authApi, setAuthToken, ApiError } from '@/lib/api-client';
 
-const registerSchema = z.object({
-  email: z.string().email('올바른 이메일을 입력하세요'),
-  password: z.string().min(6, '비밀번호는 6자 이상이어야 합니다'),
-  passwordConfirm: z.string(),
-  name: z.string().min(2, '이름은 2자 이상이어야 합니다').optional().or(z.literal('')),
-}).refine((data) => data.password === data.passwordConfirm, {
-  message: '비밀번호가 일치하지 않습니다',
-  path: ['passwordConfirm'],
-});
+const registerSchema = z
+  .object({
+    email: z.string().email('올바른 이메일을 입력하세요'),
+    password: z.string().min(6, '비밀번호는 6자 이상이어야 합니다'),
+    passwordConfirm: z.string(),
+    name: z.string().min(2, '이름은 2자 이상이어야 합니다').optional().or(z.literal('')),
+  })
+  .refine((data) => data.password === data.passwordConfirm, {
+    message: '비밀번호가 일치하지 않습니다',
+    path: ['passwordConfirm'],
+  });
 
 type RegisterForm = z.infer<typeof registerSchema>;
 
@@ -51,11 +45,7 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
-      const response = await authApi.register(
-        data.email,
-        data.password,
-        data.name || undefined
-      );
+      const response = await authApi.register(data.email, data.password, data.name || undefined);
       setAuthToken(response.accessToken, response.refreshToken);
       router.push('/');
     } catch (err) {
@@ -140,13 +130,7 @@ export default function RegisterPage() {
               sx={{ mb: 3 }}
             />
 
-            <AppButton
-              type="submit"
-              variant="contained"
-              fullWidth
-              size="large"
-              loading={loading}
-            >
+            <AppButton type="submit" variant="contained" fullWidth size="large" loading={loading}>
               회원가입
             </AppButton>
           </form>
@@ -165,7 +149,5 @@ export default function RegisterPage() {
     </Box>
   );
 }
-
-
 
 

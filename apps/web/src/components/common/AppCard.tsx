@@ -4,7 +4,7 @@
  * 공통 카드 컴포넌트
  */
 
-import { Card, CardContent, CardHeader, CardActions, Typography, Box } from '@mui/material';
+import { Card, CardContent, CardHeader, CardActions, Typography } from '@mui/material';
 import { ReactNode } from 'react';
 
 interface AppCardProps {
@@ -16,14 +16,7 @@ interface AppCardProps {
   sx?: object;
 }
 
-export default function AppCard({
-  title,
-  subtitle,
-  action,
-  children,
-  footer,
-  sx,
-}: AppCardProps) {
+export default function AppCard({ title, subtitle, action, children, footer, sx }: AppCardProps) {
   return (
     <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column', ...sx }}>
       {(title || action) && (
@@ -40,18 +33,8 @@ export default function AppCard({
           sx={{ pb: 0 }}
         />
       )}
-      <CardContent sx={{ flexGrow: 1, pt: title ? 2 : undefined }}>
-        {children}
-      </CardContent>
-      {footer && (
-        <CardActions sx={{ px: 2, pb: 2 }}>
-          {footer}
-        </CardActions>
-      )}
+      <CardContent sx={{ flexGrow: 1, pt: title ? 2 : undefined }}>{children}</CardContent>
+      {footer && <CardActions sx={{ px: 2, pb: 2 }}>{footer}</CardActions>}
     </Card>
   );
 }
-
-
-
-

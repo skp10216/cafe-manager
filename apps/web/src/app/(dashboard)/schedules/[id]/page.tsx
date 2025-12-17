@@ -42,7 +42,6 @@ export default function ScheduleDetailPage() {
   const isNew = id === 'new';
 
   const [templates, setTemplates] = useState<Template[]>([]);
-  const [loading, setLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,7 +76,6 @@ export default function ScheduleDetailPage() {
 
   const loadSchedule = async () => {
     try {
-      setLoading(true);
       const schedule = await scheduleApi.get(id);
       reset({
         name: schedule.name,
@@ -88,8 +86,6 @@ export default function ScheduleDetailPage() {
       });
     } catch (error) {
       setError('스케줄을 불러올 수 없습니다');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -218,7 +214,3 @@ export default function ScheduleDetailPage() {
     </Box>
   );
 }
-
-
-
-

@@ -1,6 +1,6 @@
 /**
  * NaverSession 컨트롤러
- * 네이버 계정 연동 API
+ * 네이버 세션 연동 API (NaverAccount 기반)
  */
 
 import {
@@ -43,9 +43,9 @@ export class NaverSessionController {
   }
 
   /**
-   * 새 네이버 계정 연동 시작
+   * 새 네이버 세션 연동 시작
    * POST /api/naver-sessions
-   * 연동 Job을 생성하고 Worker가 처리
+   * Body: { naverAccountId: string }
    */
   @Post()
   async create(
@@ -73,8 +73,13 @@ export class NaverSessionController {
   async reconnect(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.naverSessionService.reconnect(id, user.userId);
   }
+
+  /**
+   * 네이버 세션 검증 (실제 로그인 상태 + 닉네임 확인)
+   * POST /api/naver-sessions/:id/verify
+   */
+  @Post(':id/verify')
+  async verify(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.naverSessionService.verify(id, user.userId);
+  }
 }
-
-
-
-

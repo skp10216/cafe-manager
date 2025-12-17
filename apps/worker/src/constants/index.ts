@@ -10,6 +10,7 @@
 /** Job 타입 상수 */
 export const JOB_TYPES = {
   INIT_SESSION: 'INIT_SESSION',
+  VERIFY_SESSION: 'VERIFY_SESSION',  // 세션 검증 (실제 로그인 상태 + 닉네임 확인)
   CREATE_POST: 'CREATE_POST',
   SYNC_POSTS: 'SYNC_POSTS',
   DELETE_POST: 'DELETE_POST',

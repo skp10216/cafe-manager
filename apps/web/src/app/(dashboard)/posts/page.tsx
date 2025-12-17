@@ -5,11 +5,11 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Box, Typography, Link, Chip } from '@mui/material';
+import { Box, Typography, Link } from '@mui/material';
 import { Sync, OpenInNew } from '@mui/icons-material';
 import AppCard from '@/components/common/AppCard';
 import AppButton from '@/components/common/AppButton';
-import AppTable from '@/components/common/AppTable';
+import AppTable, { Column } from '@/components/common/AppTable';
 import StatusChip from '@/components/common/StatusChip';
 import { managedPostApi, ManagedPost } from '@/lib/api-client';
 
@@ -49,7 +49,7 @@ export default function PostsPage() {
     }
   };
 
-  const columns = [
+  const columns: Column<ManagedPost>[] = [
     {
       id: 'title',
       label: '제목',
@@ -72,6 +72,7 @@ export default function PostsPage() {
     },
     {
       id: 'cafeId',
+      field: 'cafeId',
       label: '카페',
       minWidth: 100,
     },
@@ -80,16 +81,13 @@ export default function PostsPage() {
       label: '작성일',
       minWidth: 120,
       render: (row: ManagedPost) =>
-        row.createdAtRemote
-          ? new Date(row.createdAtRemote).toLocaleDateString('ko-KR')
-          : '-',
+        row.createdAtRemote ? new Date(row.createdAtRemote).toLocaleDateString('ko-KR') : '-',
     },
     {
       id: 'lastSyncedAt',
       label: '최근 동기화',
       minWidth: 150,
-      render: (row: ManagedPost) =>
-        new Date(row.lastSyncedAt).toLocaleString('ko-KR'),
+      render: (row: ManagedPost) => new Date(row.lastSyncedAt).toLocaleString('ko-KR'),
     },
     {
       id: 'status',
@@ -137,7 +135,3 @@ export default function PostsPage() {
     </Box>
   );
 }
-
-
-
-

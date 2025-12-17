@@ -5,14 +5,7 @@
  */
 
 import { Chip, ChipProps } from '@mui/material';
-import {
-  CheckCircle,
-  Error,
-  Warning,
-  Schedule,
-  HourglassEmpty,
-  Cancel,
-} from '@mui/icons-material';
+import { CheckCircle, Error, Warning, Schedule, HourglassEmpty, Cancel } from '@mui/icons-material';
 
 type StatusType =
   | 'ACTIVE'
@@ -25,7 +18,9 @@ type StatusType =
   | 'EXPIRED'
   | 'ERROR'
   | 'DELETED'
-  | 'UNKNOWN';
+  | 'UNKNOWN'
+  | 'LOGIN_FAILED'
+  | 'DISABLED';
 
 interface StatusChipProps {
   status: StatusType;
@@ -48,6 +43,8 @@ const statusConfig: Record<
   ERROR: { label: '오류', color: 'error', icon: Error },
   DELETED: { label: '삭제됨', color: 'default', icon: Cancel },
   UNKNOWN: { label: '알 수 없음', color: 'default', icon: HourglassEmpty },
+  LOGIN_FAILED: { label: '로그인 실패', color: 'error', icon: Error },
+  DISABLED: { label: '비활성화', color: 'default', icon: Cancel },
 };
 
 export default function StatusChip({ status, size = 'small' }: StatusChipProps) {
@@ -64,7 +61,5 @@ export default function StatusChip({ status, size = 'small' }: StatusChipProps) 
     />
   );
 }
-
-
 
 

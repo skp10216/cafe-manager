@@ -13,7 +13,9 @@ import { PrismaModule } from './common/prisma/prisma.module';
 // 기능 모듈
 import { AuthModule } from './modules/auth/auth.module';
 import { UserModule } from './modules/user/user.module';
+import { NaverAccountModule } from './modules/naver-account/naver-account.module';
 import { NaverSessionModule } from './modules/naver-session/naver-session.module';
+import { NaverOAuthModule } from './modules/naver-oauth/naver-oauth.module';
 import { TemplateModule } from './modules/template/template.module';
 import { ScheduleModule as AppScheduleModule } from './modules/schedule/schedule.module';
 import { ManagedPostModule } from './modules/managed-post/managed-post.module';
@@ -49,7 +51,9 @@ import { JobModule } from './modules/job/job.module';
     // 기능 모듈
     AuthModule,
     UserModule,
+    NaverAccountModule,
     NaverSessionModule,
+    NaverOAuthModule,
     TemplateModule,
     AppScheduleModule,
     ManagedPostModule,
@@ -57,7 +61,3 @@ import { JobModule } from './modules/job/job.module';
   ],
 })
 export class AppModule {}
-
-
-
-

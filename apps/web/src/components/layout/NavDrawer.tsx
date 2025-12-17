@@ -78,8 +78,8 @@ export default function NavDrawer({ width, mobileOpen, onClose }: NavDrawerProps
       {/* 메뉴 목록 */}
       <List sx={{ flexGrow: 1, px: 1, py: 2 }}>
         {menuItems.map((item) => {
-          const isActive = pathname === item.path || 
-            (item.path !== '/' && pathname.startsWith(item.path));
+          const isActive =
+            pathname === item.path || (item.path !== '/' && pathname.startsWith(item.path));
           const Icon = item.icon;
 
           return (
@@ -157,7 +157,5 @@ export default function NavDrawer({ width, mobileOpen, onClose }: NavDrawerProps
     </>
   );
 }
-
-
 
 

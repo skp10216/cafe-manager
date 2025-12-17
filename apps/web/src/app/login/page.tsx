@@ -6,15 +6,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-  Box,
-  Card,
-  CardContent,
-  TextField,
-  Typography,
-  Alert,
-  Link,
-} from '@mui/material';
+import { Box, Card, CardContent, TextField, Typography, Alert, Link } from '@mui/material';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
@@ -112,13 +104,7 @@ export default function LoginPage() {
               sx={{ mb: 3 }}
             />
 
-            <AppButton
-              type="submit"
-              variant="contained"
-              fullWidth
-              size="large"
-              loading={loading}
-            >
+            <AppButton type="submit" variant="contained" fullWidth size="large" loading={loading}>
               로그인
             </AppButton>
           </form>
@@ -137,7 +123,5 @@ export default function LoginPage() {
     </Box>
   );
 }
-
-
 
 

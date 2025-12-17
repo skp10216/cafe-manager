@@ -13,19 +13,28 @@ import {
   TableRow,
   Paper,
   TablePagination,
-  Box,
   Typography,
   CircularProgress,
 } from '@mui/material';
 import { ReactNode } from 'react';
 
-interface Column<T> {
-  id: keyof T | string;
+export type Column<T> = {
+  id: string;
   label: string;
   minWidth?: number;
   align?: 'left' | 'center' | 'right';
-  render?: (row: T) => ReactNode;
-}
+} & (
+  | {
+      /** row에서 값을 읽어올 필드 (render 미지정 시 사용) */
+      field: keyof T;
+      render?: (row: T) => ReactNode;
+    }
+  | {
+      /** 계산 컬럼은 반드시 render가 필요 */
+      field?: never;
+      render: (row: T) => ReactNode;
+    }
+);
 
 interface AppTableProps<T> {
   columns: Column<T>[];
@@ -41,7 +50,7 @@ interface AppTableProps<T> {
   onRowClick?: (row: T) => void;
 }
 
-export default function AppTable<T extends Record<string, unknown>>({
+export default function AppTable<T extends object>({
   columns,
   rows,
   keyField,
@@ -95,16 +104,18 @@ export default function AppTable<T extends Record<string, unknown>>({
             ) : (
               rows.map((row) => (
                 <TableRow
-                  key={String(row[keyField])}
+                  key={String((row as unknown as Record<string, unknown>)[String(keyField)])}
                   hover
                   onClick={() => onRowClick?.(row)}
                   sx={{ cursor: onRowClick ? 'pointer' : 'default' }}
                 >
                   {columns.map((column) => (
                     <TableCell key={String(column.id)} align={column.align || 'left'}>
-                      {column.render
+                      {'render' in column && column.render
                         ? column.render(row)
-                        : (row[column.id as keyof T] as ReactNode)}
+                        : ((row as unknown as Record<string, unknown>)[
+                            String((column as { field: keyof T }).field)
+                          ] as ReactNode)}
                     </TableCell>
                   ))}
                 </TableRow>
@@ -125,15 +136,9 @@ export default function AppTable<T extends Record<string, unknown>>({
           onRowsPerPageChange={handleRowsPerPageChange}
           rowsPerPageOptions={[10, 20, 50, 100]}
           labelRowsPerPage="페이지당 행 수:"
-          labelDisplayedRows={({ from, to, count }) =>
-            `${from}-${to} / 총 ${count}개`
-          }
+          labelDisplayedRows={({ from, to, count }) => `${from}-${to} / 총 ${count}개`}
         />
       )}
     </Paper>
   );
 }
-
-
-
-
