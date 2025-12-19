@@ -192,6 +192,15 @@ model Template {
   subjectTemplate String    @map("subject_template")
   contentTemplate String    @map("content_template") @db.Text
   
+  // 템플릿 변수 정의 (JSON 배열)
+  // 예: [{"key": "상품명", "label": "상품명", "defaultValue": "", "required": true}]
+  variables       Json?     @default("[]")
+  
+  // 상품 게시판 전용 필드 (선택적)
+  price           Int?                              // 가격
+  tradeMethod     TradeMethod?  @map("trade_method") // 거래 방법
+  tradeLocation   String?       @map("trade_location") // 거래 지역
+  
   isActive        Boolean   @default(true) @map("is_active")
   
   createdAt       DateTime  @default(now()) @map("created_at")
@@ -199,11 +208,54 @@ model Template {
 
   // Relations
   user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  images          TemplateImage[]
   schedules       Schedule[]
 
   @@index([userId])
   @@index([cafeId, boardId])
   @@map("templates")
+}
+
+/// 거래 방법 (상품 게시판용)
+enum TradeMethod {
+  DIRECT    // 직거래
+  DELIVERY  // 택배
+  BOTH      // 둘 다 가능
+}
+
+// ==============================================
+// 템플릿 이미지 (TemplateImage)
+// ==============================================
+
+/// 템플릿에 첨부된 이미지
+model TemplateImage {
+  id            String    @id @default(cuid())
+  templateId    String    @map("template_id")
+  
+  // 파일 정보
+  filename      String                    // 저장된 파일명 (UUID 기반)
+  originalName  String    @map("original_name")  // 원본 파일명
+  mimeType      String    @map("mime_type")      // MIME 타입 (image/jpeg 등)
+  size          Int                       // 파일 크기 (bytes)
+  path          String                    // 저장 경로
+  url           String                    // 접근 URL
+  
+  // 이미지 메타 정보
+  width         Int?                      // 이미지 너비
+  height        Int?                      // 이미지 높이
+  
+  // 순서 관리
+  order         Int       @default(0)     // 표시 순서 (0부터 시작)
+  
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  // Relations
+  template      Template  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId])
+  @@index([templateId, order])
+  @@map("template_images")
 }
 
 // ==============================================

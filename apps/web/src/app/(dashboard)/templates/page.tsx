@@ -6,8 +6,8 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Box, Typography, IconButton, Tooltip } from '@mui/material';
-import { Add, Edit, Delete, PlayArrow } from '@mui/icons-material';
+import { Box, Typography, IconButton, Tooltip, Chip } from '@mui/material';
+import { Add, Edit, Delete, PlayArrow, Image as ImageIcon } from '@mui/icons-material';
 import AppCard from '@/components/common/AppCard';
 import AppButton from '@/components/common/AppButton';
 import AppTable, { Column } from '@/components/common/AppTable';
@@ -42,7 +42,12 @@ export default function TemplatesPage() {
   const handlePostNow = async (template: Template) => {
     try {
       const result = await templateApi.postNow(template.id);
-      alert(`게시 작업이 등록되었습니다. Job ID: ${result.jobId}`);
+      alert(
+        `게시 작업이 등록되었습니다.\n\n` +
+        `제목: ${result.preview.title}\n` +
+        `이미지: ${result.preview.imageCount}개\n\n` +
+        `Job ID: ${result.jobId}`
+      );
     } catch (error) {
       alert('게시 요청 실패');
     }
@@ -70,15 +75,30 @@ export default function TemplatesPage() {
     {
       id: 'boardName',
       label: '게시판',
-      minWidth: 120,
+      minWidth: 100,
       render: (row: Template) => row.boardName || row.boardId,
+    },
+    {
+      id: 'imageCount',
+      label: '이미지',
+      minWidth: 80,
+      align: 'center' as const,
+      render: (row: Template) => (
+        <Chip
+          icon={<ImageIcon sx={{ fontSize: 16 }} />}
+          label={row.imageCount || 0}
+          size="small"
+          variant={row.imageCount ? 'filled' : 'outlined'}
+          color={row.imageCount ? 'primary' : 'default'}
+        />
+      ),
     },
     {
       id: 'subjectTemplate',
       label: '제목 템플릿',
-      minWidth: 200,
+      minWidth: 180,
       render: (row: Template) => (
-        <Typography variant="body2" noWrap sx={{ maxWidth: 200 }}>
+        <Typography variant="body2" noWrap sx={{ maxWidth: 180 }}>
           {row.subjectTemplate}
         </Typography>
       ),
@@ -86,13 +106,13 @@ export default function TemplatesPage() {
     {
       id: 'createdAt',
       label: '생성일',
-      minWidth: 120,
+      minWidth: 100,
       render: (row: Template) => new Date(row.createdAt).toLocaleDateString('ko-KR'),
     },
     {
       id: 'actions',
       label: '작업',
-      minWidth: 150,
+      minWidth: 140,
       align: 'center' as const,
       render: (row: Template) => (
         <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center' }}>

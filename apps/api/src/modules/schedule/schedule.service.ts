@@ -215,6 +215,7 @@ export class ScheduleService {
 
   /**
    * 실행 대상 스케줄 조회 (Runner에서 사용)
+   * - 템플릿 정보 + 이미지 목록 포함
    */
   async findSchedulesToRun() {
     const now = new Date();
@@ -227,7 +228,18 @@ export class ScheduleService {
         },
       },
       include: {
-        template: true,
+        template: {
+          include: {
+            images: {
+              orderBy: { order: 'asc' },
+              select: {
+                id: true,
+                path: true,
+                order: true,
+              },
+            },
+          },
+        },
       },
     });
   }

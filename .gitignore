@@ -43,6 +43,10 @@ test-results/
 *.tsbuildinfo
 .turbo/
 
+# Uploads (keep directory structure, ignore contents)
+uploads/*
+!uploads/.gitkeep
+
 # Playwright
 playwright/.cache/
 playwright-profiles/

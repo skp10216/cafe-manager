@@ -6,6 +6,8 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bullmq';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ServeStaticModule } from '@nestjs/serve-static';
+import { join } from 'path';
 
 // 공통 모듈
 import { PrismaModule } from './common/prisma/prisma.module';
@@ -20,6 +22,7 @@ import { TemplateModule } from './modules/template/template.module';
 import { ScheduleModule as AppScheduleModule } from './modules/schedule/schedule.module';
 import { ManagedPostModule } from './modules/managed-post/managed-post.module';
 import { JobModule } from './modules/job/job.module';
+import { UploadModule } from './modules/upload/upload.module';
 
 @Module({
   imports: [
@@ -42,6 +45,23 @@ import { JobModule } from './modules/job/job.module';
       inject: [ConfigService],
     }),
 
+    // 정적 파일 서빙 (업로드된 이미지)
+    ServeStaticModule.forRootAsync({
+      imports: [ConfigModule],
+      useFactory: (configService: ConfigService) => [
+        {
+          rootPath: configService.get<string>('UPLOAD_DIR') || 
+            join(process.cwd(), 'uploads'),
+          serveRoot: '/uploads',
+          serveStaticOptions: {
+            index: false,
+            maxAge: '1d',
+          },
+        },
+      ],
+      inject: [ConfigService],
+    }),
+
     // 스케줄러 (cron job용)
     ScheduleModule.forRoot(),
 
@@ -54,6 +74,7 @@ import { JobModule } from './modules/job/job.module';
     NaverAccountModule,
     NaverSessionModule,
     NaverOAuthModule,
+    UploadModule,
     TemplateModule,
     AppScheduleModule,
     ManagedPostModule,

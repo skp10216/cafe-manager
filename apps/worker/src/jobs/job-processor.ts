@@ -355,27 +355,51 @@ export class JobProcessor {
   }
 
   /**
-   * CREATE_POST: 게시글 작성
+   * CREATE_POST: 게시글 작성 (이미지 첨부 포함)
    */
   private async handleCreatePost(
     jobId: string,
     payload: Record<string, unknown>
   ): Promise<void> {
-    const { cafeId, boardId, title, content, naverAccountId } = payload as {
+    const { 
+      cafeId, 
+      boardId, 
+      title, 
+      content, 
+      imagePaths = [],
+      price,
+      tradeMethod,
+      tradeLocation,
+      naverAccountId,
+      templateId,
+    } = payload as {
       cafeId: string;
       boardId: string;
       title: string;
       content: string;
+      imagePaths?: string[];
+      price?: number;
+      tradeMethod?: 'DIRECT' | 'DELIVERY' | 'BOTH';
+      tradeLocation?: string;
       naverAccountId?: string;
+      templateId?: string;
     };
 
-    await this.addLog(jobId, 'INFO', `게시글 작성 시작: ${cafeId}/${boardId}`);
+    await this.addLog(jobId, 'INFO', `게시글 작성 시작: ${cafeId}/${boardId}`, {
+      title,
+      imageCount: imagePaths.length,
+      hasPrice: !!price,
+    });
 
     // 작업 소유자 및 활성 세션 찾기
     const job = await this.prisma.job.findUnique({
       where: { id: jobId },
       select: { userId: true },
     });
+
+    if (!job) {
+      throw new Error('Job을 찾을 수 없습니다');
+    }
 
     // naverAccountId가 지정되면 해당 계정의 세션 사용, 없으면 사용자의 아무 활성 세션
     let session;
@@ -393,7 +417,7 @@ export class JobProcessor {
       session = await this.prisma.naverSession.findFirst({
         where: {
           naverAccount: {
-            userId: job!.userId,
+            userId: job.userId,
           },
           status: 'ACTIVE',
         },
@@ -404,37 +428,114 @@ export class JobProcessor {
     }
 
     if (!session) {
-      throw new Error('활성화된 네이버 세션이 없습니다');
+      throw new Error('활성화된 네이버 세션이 없습니다. 네이버 계정을 먼저 연동해주세요.');
     }
+
+    await this.addLog(jobId, 'INFO', `세션 사용: ${session.naverAccount?.loginId || session.id}`);
 
     // 브라우저 컨텍스트 가져오기
     const context = await this.browserManager.getContext(session.profileDir);
     const client = new NaverCafeClient(context);
 
     try {
-      // 로그인 확인
+      // 1. 로그인 상태 확인
+      await this.addLog(jobId, 'INFO', '로그인 상태 확인 중...');
       const isLoggedIn = await client.isLoggedIn();
+      
       if (!isLoggedIn) {
-        // 세션 만료 처리
-        await this.prisma.naverSession.update({
-          where: { id: session.id },
-          data: { status: 'EXPIRED' },
-        });
-        throw new Error('네이버 세션이 만료되었습니다');
+        await this.addLog(jobId, 'WARN', '세션이 만료됨. 자동 재로그인 시도...');
+        
+        // 자동 재로그인 시도
+        if (session.naverAccount) {
+          const password = decrypt(session.naverAccount.passwordEncrypted);
+          const loginResult = await client.login(session.naverAccount.loginId, password);
+          
+          if (!loginResult.success) {
+            // 세션 만료 처리
+            await this.prisma.naverSession.update({
+              where: { id: session.id },
+              data: { status: 'EXPIRED', errorMessage: loginResult.error },
+            });
+            throw new Error(`재로그인 실패: ${loginResult.error}`);
+          }
+          
+          await this.addLog(jobId, 'INFO', '재로그인 성공');
+          await this.browserManager.saveContext(session.profileDir);
+        } else {
+          await this.prisma.naverSession.update({
+            where: { id: session.id },
+            data: { status: 'EXPIRED' },
+          });
+          throw new Error('네이버 세션이 만료되었습니다');
+        }
       }
 
-      // 게시글 작성
-      const articleUrl = await client.createPost(cafeId, boardId, title, content);
-
-      if (!articleUrl) {
-        // 스크린샷 저장
-        await this.browserManager.saveScreenshot(session.profileDir, `create-post-error-${jobId}`);
-        throw new Error('게시글 작성 실패');
-      }
-
-      await this.addLog(jobId, 'INFO', `게시글 작성 완료: ${articleUrl}`, {
-        articleUrl,
+      // 2. 게시글 작성
+      await this.addLog(jobId, 'INFO', '게시글 작성 중...');
+      
+      const result = await client.createPost({
+        cafeId,
+        boardId,
+        title,
+        content,
+        imagePaths,
+        price,
+        tradeMethod,
+        tradeLocation,
       });
+
+      if (!result.success) {
+        // 실패 시 스크린샷 저장
+        await this.browserManager.saveScreenshot(
+          session.profileDir, 
+          `create-post-error-${jobId}`
+        );
+        throw new Error(result.error || '게시글 작성 실패');
+      }
+
+      // 3. 성공 로그 및 ManagedPost 등록
+      await this.addLog(jobId, 'INFO', `게시글 작성 완료: ${result.articleUrl}`, {
+        articleUrl: result.articleUrl,
+        articleId: result.articleId,
+        uploadedImages: result.uploadedImages,
+      });
+
+      // ManagedPost에 등록 (게시글 관리 목적)
+      if (result.articleId) {
+        try {
+          await this.prisma.managedPost.upsert({
+            where: {
+              cafeId_articleId: {
+                cafeId,
+                articleId: result.articleId,
+              },
+            },
+            create: {
+              userId: job.userId,
+              cafeId,
+              boardId,
+              articleId: result.articleId,
+              articleUrl: result.articleUrl || '',
+              title,
+              status: 'ACTIVE',
+              lastSyncedAt: new Date(),
+            },
+            update: {
+              title,
+              status: 'ACTIVE',
+              lastSyncedAt: new Date(),
+            },
+          });
+          await this.addLog(jobId, 'INFO', 'ManagedPost 등록 완료');
+        } catch (err) {
+          // ManagedPost 등록 실패는 치명적이지 않음
+          await this.addLog(jobId, 'WARN', 'ManagedPost 등록 실패 (무시됨)');
+        }
+      }
+
+      // 4. 브라우저 컨텍스트 저장 (세션 유지)
+      await this.browserManager.saveContext(session.profileDir);
+
     } finally {
       await client.close();
     }

@@ -208,6 +208,32 @@ export const authApi = {
 // Template API
 // ============================================
 
+/** 템플릿 이미지 */
+export interface TemplateImage {
+  id: string;
+  templateId: string;
+  filename: string;
+  originalName: string;
+  mimeType: string;
+  size: number;
+  url: string;
+  width: number | null;
+  height: number | null;
+  order: number;
+  createdAt: string;
+}
+
+/** 템플릿 변수 정의 */
+export interface TemplateVariable {
+  key: string;
+  label: string;
+  defaultValue?: string;
+  required?: boolean;
+}
+
+/** 거래 방법 */
+export type TradeMethod = 'DIRECT' | 'DELIVERY' | 'BOTH';
+
 export interface Template {
   id: string;
   name: string;
@@ -217,8 +243,15 @@ export interface Template {
   boardName: string | null;
   subjectTemplate: string;
   contentTemplate: string;
+  variables: TemplateVariable[] | null;
+  price: number | null;
+  tradeMethod: TradeMethod | null;
+  tradeLocation: string | null;
   isActive: boolean;
   createdAt: string;
+  updatedAt: string;
+  images?: TemplateImage[];
+  imageCount?: number;
 }
 
 export interface PaginatedResponse<T> {
@@ -231,25 +264,99 @@ export interface PaginatedResponse<T> {
   };
 }
 
+/** 이미지 업로드 응답 */
+interface UploadImagesResponse {
+  message: string;
+  images: TemplateImage[];
+  totalCount: number;
+}
+
+/** 즉시 게시 응답 */
+interface PostNowResponse {
+  message: string;
+  jobId: string;
+  preview: {
+    title: string;
+    content: string;
+    imageCount: number;
+  };
+}
+
 export const templateApi = {
+  /** 템플릿 목록 조회 */
   list: (page = 1, limit = 20) =>
     request<PaginatedResponse<Template>>(`/templates?page=${page}&limit=${limit}`),
 
+  /** 템플릿 상세 조회 (이미지 포함) */
   get: (id: string) => request<Template>(`/templates/${id}`),
 
+  /** 템플릿 생성 */
   create: (data: Partial<Template>) =>
     request<Template>('/templates', { method: 'POST', body: data }),
 
+  /** 템플릿 수정 */
   update: (id: string, data: Partial<Template>) =>
     request<Template>(`/templates/${id}`, { method: 'PATCH', body: data }),
 
+  /** 템플릿 삭제 */
   delete: (id: string) => request<void>(`/templates/${id}`, { method: 'DELETE' }),
 
+  /** 즉시 게시 */
   postNow: (id: string, variables?: Record<string, string>) =>
-    request<{ message: string; jobId: string }>(`/templates/${id}/post-now`, {
+    request<PostNowResponse>(`/templates/${id}/post-now`, {
       method: 'POST',
       body: { variables },
     }),
+
+  // === 이미지 관련 API ===
+
+  /** 템플릿 이미지 목록 조회 */
+  getImages: (templateId: string) =>
+    request<TemplateImage[]>(`/templates/${templateId}/images`),
+
+  /** 이미지 업로드 (multipart/form-data) */
+  uploadImages: async (templateId: string, files: File[]): Promise<UploadImagesResponse> => {
+    const token = typeof window !== 'undefined' ? localStorage.getItem('accessToken') : null;
+    const formData = new FormData();
+    files.forEach((file) => formData.append('images', file));
+
+    const response = await fetch(
+      `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api'}/templates/${templateId}/images`,
+      {
+        method: 'POST',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      }
+    );
+
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new ApiError(response.status, error.message || '이미지 업로드 실패');
+    }
+
+    return response.json();
+  },
+
+  /** 이미지 순서 변경 */
+  reorderImages: (templateId: string, imageIds: string[]) =>
+    request<TemplateImage[]>(`/templates/${templateId}/images/reorder`, {
+      method: 'PATCH',
+      body: { imageIds },
+    }),
+
+  /** 특정 이미지 삭제 */
+  deleteImage: (templateId: string, imageId: string) =>
+    request<{ message: string; deletedId: string }>(
+      `/templates/${templateId}/images/${imageId}`,
+      { method: 'DELETE' }
+    ),
+
+  /** 모든 이미지 삭제 */
+  deleteAllImages: (templateId: string) =>
+    request<{ message: string; deletedCount: number }>(
+      `/templates/${templateId}/images`,
+      { method: 'DELETE' }
+    ),
 };
 
 // ============================================

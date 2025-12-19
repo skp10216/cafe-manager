@@ -1,6 +1,6 @@
 /**
  * Template 컨트롤러
- * 템플릿 CRUD 및 즉시 게시 API
+ * 템플릿 CRUD, 이미지 관리 및 즉시 게시 API
  */
 
 import {
@@ -13,21 +13,30 @@ import {
   Body,
   Query,
   UseGuards,
+  UseInterceptors,
+  UploadedFiles,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
 import { TemplateService } from './template.service';
+import { TemplateImageService } from './template-image.service';
 import { JwtAuthGuard } from '@/common/guards/jwt-auth.guard';
 import { CurrentUser, RequestUser } from '@/common/decorators/current-user.decorator';
 import { CreateTemplateDto } from './dto/create-template.dto';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 import { PostNowDto } from './dto/post-now.dto';
+import { ReorderImagesDto } from './dto/template-image.dto';
 import { PaginationQueryDto } from '@/common/dto/pagination.dto';
 
 @Controller('templates')
 @UseGuards(JwtAuthGuard)
 export class TemplateController {
-  constructor(private readonly templateService: TemplateService) {}
+  constructor(
+    private readonly templateService: TemplateService,
+    private readonly templateImageService: TemplateImageService,
+  ) {}
 
   /**
    * 템플릿 목록 조회
@@ -96,6 +105,81 @@ export class TemplateController {
     @Body() dto: PostNowDto
   ) {
     return this.templateService.postNow(id, user.userId, dto);
+  }
+
+  // ===========================================
+  // 이미지 관리 엔드포인트
+  // ===========================================
+
+  /**
+   * 템플릿 이미지 목록 조회
+   * GET /api/templates/:id/images
+   */
+  @Get(':id/images')
+  async getImages(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+  ) {
+    return this.templateImageService.findAll(id, user.userId);
+  }
+
+  /**
+   * 이미지 업로드 (최대 10개)
+   * POST /api/templates/:id/images
+   * Content-Type: multipart/form-data
+   */
+  @Post(':id/images')
+  @UseInterceptors(FilesInterceptor('images', 10))
+  async uploadImages(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @UploadedFiles() files: Express.Multer.File[],
+  ) {
+    if (!files || files.length === 0) {
+      throw new BadRequestException('업로드할 이미지가 없습니다');
+    }
+
+    return this.templateImageService.addImages(id, user.userId, files);
+  }
+
+  /**
+   * 이미지 순서 변경
+   * PATCH /api/templates/:id/images/reorder
+   */
+  @Patch(':id/images/reorder')
+  async reorderImages(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: ReorderImagesDto,
+  ) {
+    return this.templateImageService.reorderImages(id, user.userId, dto.imageIds);
+  }
+
+  /**
+   * 특정 이미지 삭제
+   * DELETE /api/templates/:id/images/:imageId
+   */
+  @Delete(':id/images/:imageId')
+  @HttpCode(HttpStatus.OK)
+  async deleteImage(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Param('imageId') imageId: string,
+  ) {
+    return this.templateImageService.deleteImage(id, imageId, user.userId);
+  }
+
+  /**
+   * 템플릿의 모든 이미지 삭제
+   * DELETE /api/templates/:id/images
+   */
+  @Delete(':id/images')
+  @HttpCode(HttpStatus.OK)
+  async deleteAllImages(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+  ) {
+    return this.templateImageService.deleteAllImages(id, user.userId);
   }
 }
 
