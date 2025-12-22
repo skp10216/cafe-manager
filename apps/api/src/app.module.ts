@@ -23,6 +23,7 @@ import { ScheduleModule as AppScheduleModule } from './modules/schedule/schedule
 import { ManagedPostModule } from './modules/managed-post/managed-post.module';
 import { JobModule } from './modules/job/job.module';
 import { UploadModule } from './modules/upload/upload.module';
+import { DashboardModule } from './modules/dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -79,6 +80,7 @@ import { UploadModule } from './modules/upload/upload.module';
     AppScheduleModule,
     ManagedPostModule,
     JobModule,
+    DashboardModule,
   ],
 })
 export class AppModule {}

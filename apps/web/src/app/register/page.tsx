@@ -4,14 +4,14 @@
  * 회원가입 페이지
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Box, Card, CardContent, TextField, Typography, Alert, Link } from '@mui/material';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import AppButton from '@/components/common/AppButton';
-import { authApi, setAuthToken, ApiError } from '@/lib/api-client';
+import { authApi, setAuthToken, clearAuthToken, ApiError } from '@/lib/api-client';
 
 const registerSchema = z
   .object({
@@ -32,6 +32,11 @@ export default function RegisterPage() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  // 회원가입 페이지 진입 시 기존 토큰 삭제 (보안: 이전 사용자 세션 완전 정리)
+  useEffect(() => {
+    clearAuthToken();
+  }, []);
+
   const {
     register,
     handleSubmit,
@@ -45,6 +50,9 @@ export default function RegisterPage() {
     setLoading(true);
 
     try {
+      // 중요: 회원가입 전 기존 토큰 삭제 (이전 사용자 데이터 노출 방지)
+      clearAuthToken();
+      
       const response = await authApi.register(data.email, data.password, data.name || undefined);
       setAuthToken(response.accessToken, response.refreshToken);
       router.push('/');

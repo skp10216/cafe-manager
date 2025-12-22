@@ -7,6 +7,7 @@
 
 import { ThemeProvider, CssBaseline } from '@mui/material';
 import { theme } from './theme';
+import { ToastProvider } from '@/components/common/ToastProvider';
 
 interface ThemeRegistryProps {
   children: React.ReactNode;
@@ -16,7 +17,7 @@ export default function ThemeRegistry({ children }: ThemeRegistryProps) {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      {children}
+      <ToastProvider maxToasts={5}>{children}</ToastProvider>
     </ThemeProvider>
   );
 }

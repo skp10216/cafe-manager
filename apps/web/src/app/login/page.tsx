@@ -4,14 +4,14 @@
  * 로그인 페이지
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Box, Card, CardContent, TextField, Typography, Alert, Link } from '@mui/material';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import AppButton from '@/components/common/AppButton';
-import { authApi, setAuthToken, ApiError } from '@/lib/api-client';
+import { authApi, setAuthToken, clearAuthToken, ApiError } from '@/lib/api-client';
 
 const loginSchema = z.object({
   email: z.string().email('올바른 이메일을 입력하세요'),
@@ -24,6 +24,11 @@ export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  // 로그인 페이지 진입 시 기존 토큰 삭제 (보안: 이전 사용자 세션 완전 정리)
+  useEffect(() => {
+    clearAuthToken();
+  }, []);
 
   const {
     register,
@@ -38,6 +43,9 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
+      // 중요: 로그인 전 기존 토큰 삭제 (이전 사용자 데이터 노출 방지)
+      clearAuthToken();
+      
       const response = await authApi.login(data.email, data.password);
       setAuthToken(response.accessToken, response.refreshToken);
       router.push('/');

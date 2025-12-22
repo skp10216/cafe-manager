@@ -455,6 +455,7 @@ export interface Job {
   id: string;
   type: 'INIT_SESSION' | 'VERIFY_SESSION' | 'CREATE_POST' | 'SYNC_POSTS' | 'DELETE_POST';
   status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  payload: Record<string, unknown>;
   errorMessage: string | null;
   createdAt: string;
   startedAt: string | null;
@@ -630,4 +631,197 @@ export const naverOauthApi = {
   /** 연결 해제 */
   disconnect: (id: string) =>
     request<{ ok: boolean }>(`/naver-oauth/accounts/${id}`, { method: 'DELETE' }),
+};
+
+// ============================================
+// Dashboard API (대시보드 전용)
+// ============================================
+
+/** 에러 카테고리 */
+export type ErrorCategory =
+  | 'LOGIN_REQUIRED'
+  | 'PERMISSION_DENIED'
+  | 'EDITOR_LOAD_FAIL'
+  | 'IMAGE_UPLOAD_FAIL'
+  | 'NETWORK_ERROR'
+  | 'CAFE_NOT_FOUND'
+  | 'RATE_LIMITED'
+  | 'UNKNOWN';
+
+/** 연동 상태 타입 */
+export type IntegrationStatusType = 'OK' | 'WARNING' | 'ACTION_REQUIRED' | 'NOT_CONNECTED';
+
+/** 연동 상태 응답 */
+export interface IntegrationStatusResponse {
+  status: IntegrationStatusType;
+  statusReason: string;
+  account: {
+    loginId: string;
+    displayName: string | null;
+  } | null;
+  session: {
+    id: string;
+    status: 'PENDING' | 'ACTIVE' | 'EXPIRED' | 'ERROR';
+    lastVerifiedAt: string | null;
+    errorMessage: string | null;
+    naverNickname: string | null;
+  } | null;
+}
+
+/** 미니 작업 아이템 */
+export interface MiniJobItem {
+  jobId: string;
+  type: string;
+  templateName: string | null;
+  scheduleName: string | null;
+  cafeName: string | null;
+  boardName: string | null;
+  createdAt: string;
+  finishedAt: string | null;
+  status: string;
+  resultUrl: string | null;
+  errorCategory: ErrorCategory | null;
+  errorSummary: string | null;
+}
+
+/** 카드 데이터 */
+export interface CardData {
+  count: number;
+  recent: MiniJobItem[];
+}
+
+/** 작업 요약 응답 */
+export interface JobSummaryResponse {
+  today: {
+    total: number;
+    completed: number;
+    failed: number;
+    processing: number;
+  };
+  cards: {
+    todayJobs: CardData;
+    completed: CardData;
+    failed: CardData;
+    processing: CardData;
+  };
+}
+
+/** 타임라인 상태 */
+export type TimelineStatus = 'SCHEDULED' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+
+/** 타임라인 아이템 */
+export interface TimelineItem {
+  scheduleId: string;
+  scheduleName: string;
+  templateId: string;
+  templateName: string;
+  cafeId: string;
+  cafeName: string;
+  boardId: string;
+  boardName: string;
+  nextRunAt: string;
+  status: TimelineStatus;
+  preview: {
+    subject: string;
+    contentSnippet: string;
+    thumbnailUrl: string | null;
+    imageCount: number;
+  };
+  relatedJobId?: string;
+  resultUrl?: string;
+  errorSummary?: string;
+}
+
+/** 오늘 타임라인 응답 */
+export interface TodayTimelineResponse {
+  items: TimelineItem[];
+  totalScheduledToday: number;
+  completedToday: number;
+  failedToday: number;
+}
+
+/** Next Run 아이템 */
+export interface NextRunItem {
+  scheduleId: string;
+  scheduleName: string;
+  templateName: string;
+  cafeName: string;
+  boardName: string;
+  nextRunAt: string;
+  remainingMinutes: number;
+}
+
+/** Next Run 응답 */
+export interface NextRunResponse {
+  items: NextRunItem[];
+}
+
+/** 실패 카테고리 아이템 */
+export interface FailureCategoryItem {
+  category: ErrorCategory;
+  label: string;
+  count: number;
+  percentage: number;
+  latestJobId: string;
+}
+
+/** 실패 요약 응답 */
+export interface FailureSummaryResponse {
+  topCategories: FailureCategoryItem[];
+  totalFailures: number;
+  period: 'TODAY' | 'WEEK';
+}
+
+/** 최근 결과 아이템 */
+export interface RecentResultItem {
+  jobId: string;
+  type: string;
+  templateName: string | null;
+  scheduleName: string | null;
+  cafeName: string | null;
+  boardName: string | null;
+  status: string;
+  createdAt: string;
+  finishedAt: string | null;
+  durationSeconds: number | null;
+  resultUrl: string | null;
+  screenshotUrl: string | null;
+  errorCategory: ErrorCategory | null;
+  errorSummary: string | null;
+}
+
+/** 최근 결과 응답 */
+export interface RecentResultsResponse {
+  items: RecentResultItem[];
+  total: number;
+}
+
+export const dashboardApi = {
+  /** 연동 상태 조회 */
+  getIntegrationStatus: () => 
+    request<IntegrationStatusResponse>('/dashboard/integration-status'),
+
+  /** 작업 요약 조회 */
+  getJobSummary: () => 
+    request<JobSummaryResponse>('/dashboard/job-summary'),
+
+  /** 오늘 타임라인 조회 */
+  getTodayTimeline: () => 
+    request<TodayTimelineResponse>('/dashboard/today-timeline'),
+
+  /** Next Run TOP N 조회 */
+  getNextRun: (limit: number = 3) => 
+    request<NextRunResponse>(`/dashboard/next-run?limit=${limit}`),
+
+  /** 실패 요약 조회 */
+  getFailureSummary: (period: 'TODAY' | 'WEEK' = 'TODAY') => 
+    request<FailureSummaryResponse>(`/dashboard/failure-summary?period=${period}`),
+
+  /** 최근 결과 조회 */
+  getRecentResults: (params?: { limit?: number; filter?: 'ALL' | 'SUCCESS' | 'FAILED' }) => {
+    const query = new URLSearchParams();
+    if (params?.limit) query.set('limit', String(params.limit));
+    if (params?.filter) query.set('filter', params.filter);
+    return request<RecentResultsResponse>(`/dashboard/recent-results?${query}`);
+  },
 };
