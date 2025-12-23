@@ -44,29 +44,169 @@ export class JobService {
         userId: string,
         query: JobQueryDto
     ): Promise<PaginatedResponse<Job>> {
-        const { page = 1, limit = 20, type, status } = query;
+        const {
+            page = 1,
+            limit = 20,
+            type,
+            status,
+            dateFrom,
+            dateTo,
+            scheduleId,
+            scheduleName,
+        } = query;
         const skip = (page - 1) * limit;
 
-        const where = {
+        const where: any = {
             userId,
             ...(type && { type }),
             ...(status && { status }),
         };
 
-        const [data, total] = await Promise.all([
+        // 날짜 범위 필터
+        if (dateFrom || dateTo) {
+            where.createdAt = {};
+            if (dateFrom) {
+                where.createdAt.gte = new Date(dateFrom);
+            }
+            if (dateTo) {
+                // 종료일의 23:59:59.999까지 포함
+                const endDate = new Date(dateTo);
+                endDate.setHours(23, 59, 59, 999);
+                where.createdAt.lte = endDate;
+            }
+        }
+
+        // 스케줄 필터는 JSON payload에서 필터링해야 하므로 post-filter 필요
+        const needsPostFilter = scheduleId || scheduleName;
+
+        const [allData, total] = await Promise.all([
             this.prisma.job.findMany({
                 where,
                 orderBy: { createdAt: 'desc' },
-                skip,
-                take: limit,
+                skip: needsPostFilter ? 0 : skip,
+                take: needsPostFilter ? undefined : limit,
             }),
-            this.prisma.job.count({ where }),
+            needsPostFilter ? 0 : this.prisma.job.count({ where }),
         ]);
 
+        // Post-filter: 스케줄 필터 적용
+        let data = allData;
+        if (needsPostFilter) {
+            data = allData.filter((job) => {
+                const payload = job.payload as any;
+                if (scheduleId && payload?.scheduleId !== scheduleId) {
+                    return false;
+                }
+                if (
+                    scheduleName &&
+                    !payload?.scheduleName
+                        ?.toLowerCase()
+                        .includes(scheduleName.toLowerCase())
+                ) {
+                    return false;
+                }
+                return true;
+            });
+
+            // 필터링 후 페이지네이션 적용
+            const filteredTotal = data.length;
+            data = data.slice(skip, skip + limit);
+
+            return {
+                data,
+                meta: createPaginationMeta(page, limit, filteredTotal),
+            };
+        }
+
+        // 실행 순서 정보 추가
+        const enrichedData = await this.enrichWithExecutionOrder(data);
+
         return {
-            data,
+            data: enrichedData,
             meta: createPaginationMeta(page, limit, total),
         };
+    }
+
+    /**
+     * 작업에 실행 순서 정보 추가
+     */
+    private async enrichWithExecutionOrder(jobs: Job[]): Promise<any[]> {
+        // CREATE_POST 작업에서 고유한 scheduleId 추출
+        const scheduleIds = new Set<string>();
+        jobs.forEach((job) => {
+            const payload = job.payload as any;
+            if (job.type === 'CREATE_POST' && payload?.scheduleId) {
+                scheduleIds.add(payload.scheduleId);
+            }
+        });
+
+        if (scheduleIds.size === 0) {
+            // 스케줄 작업이 없으면 그대로 반환
+            return jobs.map((job) => ({
+                ...job,
+                executionOrder: null,
+                totalExecutions: null,
+            }));
+        }
+
+        // 배치 쿼리: 해당 스케줄들의 모든 CREATE_POST 작업 조회
+        const scheduleJobs = await this.prisma.job.findMany({
+            where: {
+                type: 'CREATE_POST',
+            },
+            select: {
+                id: true,
+                createdAt: true,
+                payload: true,
+            },
+            orderBy: {
+                createdAt: 'asc',
+            },
+        });
+
+        // scheduleId별로 그룹화
+        const scheduleJobMap = new Map<
+            string,
+            Array<{ id: string; createdAt: Date }>
+        >();
+        scheduleJobs.forEach((job) => {
+            const payload = job.payload as any;
+            const scheduleId = payload?.scheduleId;
+            if (scheduleId && scheduleIds.has(scheduleId)) {
+                if (!scheduleJobMap.has(scheduleId)) {
+                    scheduleJobMap.set(scheduleId, []);
+                }
+                scheduleJobMap.get(scheduleId)!.push({
+                    id: job.id,
+                    createdAt: job.createdAt,
+                });
+            }
+        });
+
+        // 각 작업에 실행 순서 정보 추가
+        return jobs.map((job) => {
+            const payload = job.payload as any;
+            const scheduleId = payload?.scheduleId;
+
+            if (job.type === 'CREATE_POST' && scheduleId) {
+                const scheduleJobsList = scheduleJobMap.get(scheduleId) || [];
+                const totalExecutions = scheduleJobsList.length;
+                const executionOrder =
+                    scheduleJobsList.findIndex((sj) => sj.id === job.id) + 1;
+
+                return {
+                    ...job,
+                    executionOrder: executionOrder > 0 ? executionOrder : null,
+                    totalExecutions,
+                };
+            }
+
+            return {
+                ...job,
+                executionOrder: null,
+                totalExecutions: null,
+            };
+        });
     }
 
     /**

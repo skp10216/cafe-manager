@@ -460,6 +460,8 @@ export interface Job {
   createdAt: string;
   startedAt: string | null;
   finishedAt: string | null;
+  executionOrder: number | null;
+  totalExecutions: number | null;
 }
 
 export interface JobLog {
@@ -471,12 +473,25 @@ export interface JobLog {
 }
 
 export const jobApi = {
-  list: (params?: { page?: number; limit?: number; type?: string; status?: string }) => {
+  list: (params?: {
+    page?: number;
+    limit?: number;
+    type?: string;
+    status?: string;
+    dateFrom?: string;
+    dateTo?: string;
+    scheduleId?: string;
+    scheduleName?: string;
+  }) => {
     const query = new URLSearchParams();
     if (params?.page) query.set('page', String(params.page));
     if (params?.limit) query.set('limit', String(params.limit));
     if (params?.type) query.set('type', params.type);
     if (params?.status) query.set('status', params.status);
+    if (params?.dateFrom) query.set('dateFrom', params.dateFrom);
+    if (params?.dateTo) query.set('dateTo', params.dateTo);
+    if (params?.scheduleId) query.set('scheduleId', params.scheduleId);
+    if (params?.scheduleName) query.set('scheduleName', params.scheduleName);
     return request<PaginatedResponse<Job>>(`/jobs?${query}`);
   },
 

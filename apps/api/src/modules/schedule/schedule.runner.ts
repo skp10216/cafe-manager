@@ -56,14 +56,18 @@ export class ScheduleRunner {
    */
   private async processSchedule(schedule: {
     id: string;
+    name: string;
     userId: string;
     templateId: string;
     maxPostsPerDay: number;
     todayPostCount: number;
     template: {
       id: string;
+      name: string;
       cafeId: string;
+      cafeName: string | null;
       boardId: string;
+      boardName: string | null;
       subjectTemplate: string;
       contentTemplate: string;
       price: number | null;
@@ -106,9 +110,13 @@ export class ScheduleRunner {
         userId: schedule.userId,
         payload: {
           scheduleId: schedule.id,
+          scheduleName: schedule.name,
           templateId: schedule.templateId,
+          templateName: schedule.template.name,
           cafeId: schedule.template.cafeId,
+          cafeName: schedule.template.cafeName,
           boardId: schedule.template.boardId,
+          boardName: schedule.template.boardName,
           title,
           content,
           imagePaths,
