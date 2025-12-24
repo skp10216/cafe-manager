@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(find:*)",
+      "Bash(pnpm --filter @cafe-manager/web run build)",
+      "Bash(pnpm --filter @cafe-manager/web exec prettier:*)",
+      "Bash(pnpm exec tsc:*)",
+      "Bash(pnpm dev:api:*)",
+      "Bash(pnpm dev:web:*)",
+      "Bash(timeout:*)",
+      "Bash(if exist .next rmdir /s /q .next)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(git status:*)",
+      "Bash(git add:*)",
+      "Bash(git restore:*)",
+      "Bash(git commit -m \"$\\(cat <<''EOF''\n작업 로그 페이지 기능 개선\n\n- 날짜별 필터 기능 추가 \\(오늘/어제/최근 7일/최근 30일\\)\n- 스케줄 정보 표시 및 실행 순서 추적 기능 추가\n- 스케줄 이름으로 검색 기능 추가\n- Job payload에 스케줄/템플릿 메타데이터 추가\n\n🤖 Generated with [Claude Code]\\(https://claude.com/claude-code\\)\n\nCo-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>\nEOF\n\\)\")",
+      "Bash(cat:*)",
+      "Bash(git commit:*)",
+      "Bash(git push)",
+      "Bash(docker:*)",
+      "Bash(npx prisma migrate:*)",
+      "Bash(mkdir:*)"
+    ]
+  }
+}

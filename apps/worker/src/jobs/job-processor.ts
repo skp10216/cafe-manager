@@ -71,6 +71,11 @@ export class JobProcessor {
       // 성공 처리
       await this.updateJobStatus(jobId, 'COMPLETED', { finishedAt: new Date() });
       await this.addLog(jobId, 'INFO', 'Job 처리 완료');
+
+      // ScheduleRun 진행률 업데이트
+      if (job.scheduleRunId) {
+        await this.updateScheduleRunProgress(job.scheduleRunId, 'completed');
+      }
     } catch (error) {
       // 실패 처리
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -79,6 +84,12 @@ export class JobProcessor {
         errorMessage,
       });
       await this.addLog(jobId, 'ERROR', `Job 처리 실패: ${errorMessage}`);
+
+      // ScheduleRun 진행률 업데이트
+      if (job.scheduleRunId) {
+        await this.updateScheduleRunProgress(job.scheduleRunId, 'failed');
+      }
+
       throw error;
     }
   }
@@ -716,5 +727,54 @@ export class JobProcessor {
 
     // 콘솔에도 출력
     logger.log(level.toLowerCase(), `[Job:${jobId}] ${message}`);
+  }
+
+  /**
+   * ScheduleRun 진행률 업데이트
+   */
+  private async updateScheduleRunProgress(
+    scheduleRunId: string,
+    jobStatus: 'completed' | 'failed'
+  ) {
+    try {
+      const run = await this.prisma.scheduleRun.findUnique({
+        where: { id: scheduleRunId },
+      });
+
+      if (!run) {
+        logger.warn(`ScheduleRun not found: ${scheduleRunId}`);
+        return;
+      }
+
+      const updates: any = {
+        completedJobs:
+          jobStatus === 'completed' ? run.completedJobs + 1 : run.completedJobs,
+        failedJobs: jobStatus === 'failed' ? run.failedJobs + 1 : run.failedJobs,
+      };
+
+      // 첫 Job 시작 시각 기록
+      if (!run.startedAt) {
+        updates.startedAt = new Date();
+      }
+
+      // 모든 Job 완료 여부 확인
+      if (updates.completedJobs + updates.failedJobs >= run.totalJobs) {
+        updates.status = updates.failedJobs === 0 ? 'COMPLETED' : 'FAILED';
+        updates.finishedAt = new Date();
+      }
+
+      await this.prisma.scheduleRun.update({
+        where: { id: scheduleRunId },
+        data: updates,
+      });
+
+      logger.debug(
+        `ScheduleRun ${scheduleRunId} updated: ` +
+        `${updates.completedJobs}/${run.totalJobs} completed, ` +
+        `${updates.failedJobs} failed`
+      );
+    } catch (error) {
+      logger.error(`Failed to update ScheduleRun progress: ${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 }

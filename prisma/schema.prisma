@@ -35,6 +35,7 @@ model User {
   naverOauthStates   NaverOAuthState[]   // OAuth state (CSRF 방지/콜백 검증)
   templates     Template[]
   schedules     Schedule[]
+  scheduleRuns  ScheduleRun[]
   managedPosts  ManagedPost[]
   jobs          Job[]
 
@@ -264,33 +265,32 @@ model TemplateImage {
 
 /// 자동 포스팅 스케줄
 model Schedule {
-  id              String          @id @default(cuid())
-  userId          String          @map("user_id")
-  templateId      String          @map("template_id")
-  name            String
-  
-  // 스케줄 설정 (둘 중 하나 사용)
-  cronExpr        String?         @map("cron_expr")         // cron 표현식
-  intervalMinutes Int?            @map("interval_minutes")  // 분 단위 간격
-  
-  maxPostsPerDay  Int             @default(10) @map("max_posts_per_day")
-  status          ScheduleStatus  @default(PAUSED)
-  
+  id                  String          @id @default(cuid())
+  userId              String          @map("user_id")
+  templateId          String          @map("template_id")
+  name                String
+
+  // 실행 설정 (Daily Run 개념)
+  runTime             String          // "09:00" 형식 (HH:mm)
+  dailyPostCount      Int             @default(10) @map("daily_post_count")   // 하루 게시글 수
+  postIntervalMinutes Int             @default(5) @map("post_interval_minutes") // 게시글 간격 (분)
+
+  status              ScheduleStatus  @default(PAUSED)
+
   // 실행 정보
-  lastRunAt       DateTime?       @map("last_run_at")
-  nextRunAt       DateTime?       @map("next_run_at")
-  todayPostCount  Int             @default(0) @map("today_post_count")
-  
-  createdAt       DateTime        @default(now()) @map("created_at")
-  updatedAt       DateTime        @updatedAt @map("updated_at")
+  lastRunDate         DateTime?       @map("last_run_date")  // 마지막 실행 날짜
+
+  createdAt           DateTime        @default(now()) @map("created_at")
+  updatedAt           DateTime        @updatedAt @map("updated_at")
 
   // Relations
-  user            User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  template        Template        @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  template            Template        @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  runs                ScheduleRun[]
 
   @@index([userId])
   @@index([templateId])
-  @@index([status, nextRunAt])
+  @@index([status, runTime])
   @@map("schedules")
 }
 
@@ -299,6 +299,48 @@ enum ScheduleStatus {
   ACTIVE  // 활성화됨
   PAUSED  // 일시정지됨
   ERROR   // 오류 발생
+}
+
+// ==============================================
+// 스케줄 실행 (ScheduleRun)
+// ==============================================
+
+/// 스케줄의 하루 단위 실행 기록
+model ScheduleRun {
+  id            String    @id @default(cuid())
+  scheduleId    String    @map("schedule_id")
+  userId        String    @map("user_id")
+  runDate       DateTime  @map("run_date")  // 실행 날짜 (YYYY-MM-DD)
+  status        RunStatus @default(PENDING)
+
+  // 실행 통계
+  totalJobs     Int       @default(0) @map("total_jobs")
+  completedJobs Int       @default(0) @map("completed_jobs")
+  failedJobs    Int       @default(0) @map("failed_jobs")
+
+  // 실행 시간
+  triggeredAt   DateTime  @default(now()) @map("triggered_at")  // 트리거 시각
+  startedAt     DateTime? @map("started_at")   // 첫 Job 시작
+  finishedAt    DateTime? @map("finished_at")  // 마지막 Job 완료
+
+  // Relations
+  schedule      Schedule  @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  jobs          Job[]
+
+  @@unique([scheduleId, runDate])  // 하루 1회 제약
+  @@index([userId])
+  @@index([runDate])
+  @@map("schedule_runs")
+}
+
+/// 스케줄 실행 상태
+enum RunStatus {
+  PENDING    // 생성됨, Job 대기 중
+  RUNNING    // Job 실행 중
+  COMPLETED  // 모든 Job 완료
+  FAILED     // 일부 또는 전체 Job 실패
+  CANCELLED  // 취소됨
 }
 
 // ==============================================
@@ -351,32 +393,38 @@ enum ManagedPostStatus {
 
 /// 백그라운드 작업
 model Job {
-  id           String    @id @default(cuid())
-  type         JobType
-  userId       String    @map("user_id")
-  
+  id             String    @id @default(cuid())
+  type           JobType
+  userId         String    @map("user_id")
+
   // 작업 정보
-  payload      Json      @default("{}")
-  status       JobStatus @default(PENDING)
-  errorMessage String?   @map("error_message") @db.Text
-  
+  payload        Json      @default("{}")
+  status         JobStatus @default(PENDING)
+  errorMessage   String?   @map("error_message") @db.Text
+
+  // 스케줄 관련 (추가)
+  scheduleRunId  String?   @map("schedule_run_id")
+  sequenceNumber Int?      @map("sequence_number")  // 실행 순서 (1/10, 2/10...)
+
   // 재시도 정보
-  attempts     Int       @default(0)
-  maxAttempts  Int       @default(3) @map("max_attempts")
-  
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(3) @map("max_attempts")
+
   // 타임스탬프
-  createdAt    DateTime  @default(now()) @map("created_at")
-  startedAt    DateTime? @map("started_at")
-  finishedAt   DateTime? @map("finished_at")
-  updatedAt    DateTime  @updatedAt @map("updated_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  startedAt      DateTime? @map("started_at")
+  finishedAt     DateTime? @map("finished_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
 
   // Relations
-  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  logs         JobLog[]
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  scheduleRun    ScheduleRun? @relation(fields: [scheduleRunId], references: [id], onDelete: SetNull)
+  logs           JobLog[]
 
   @@index([userId])
   @@index([type, status])
   @@index([createdAt])
+  @@index([scheduleRunId])
   @@map("jobs")
 }
 

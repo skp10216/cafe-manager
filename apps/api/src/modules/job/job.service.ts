@@ -296,7 +296,8 @@ export class JobService {
      */
     async createJob(input: CreateJobInput): Promise<Job> {
         this.logger.log(
-            `createJob 시작: type=${input.type}, userId=${input.userId}`
+            `createJob 시작: type=${input.type}, userId=${input.userId}` +
+            (input.scheduleRunId ? `, scheduleRunId=${input.scheduleRunId}` : '')
         );
 
         // 1) DB에 작업 레코드 생성
@@ -307,18 +308,27 @@ export class JobService {
                 payload: input.payload as Prisma.InputJsonValue,
                 status: 'PENDING',
                 maxAttempts: DEFAULT_JOB_MAX_ATTEMPTS,
+                scheduleRunId: input.scheduleRunId,        // 추가
+                sequenceNumber: input.sequenceNumber,      // 추가
             },
         });
 
         this.logger.log(
-            `Job 레코드 생성 완료: jobId=${job.id}, type=${job.type}`
+            `Job 레코드 생성 완료: jobId=${job.id}, type=${job.type}` +
+            (job.sequenceNumber ? `, seq=${job.sequenceNumber}` : '')
         );
 
-        // 2) BullMQ 큐에 작업 추가
+        // 2) BullMQ 큐에 작업 추가 (delay 포함)
         try {
-            await this.jobProducer.addJob(job.id, input.type, input.payload);
+            await this.jobProducer.addJob(
+                job.id,
+                input.type,
+                input.payload,
+                input.delay  // delay 추가
+            );
             this.logger.log(
-                `BullMQ 큐 추가 성공: jobId=${job.id}, type=${job.type}`
+                `BullMQ 큐 추가 성공: jobId=${job.id}, type=${job.type}` +
+                (input.delay ? `, delay=${input.delay}ms` : '')
             );
         } catch (error) {
             const message =

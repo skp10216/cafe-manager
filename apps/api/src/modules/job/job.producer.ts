@@ -22,10 +22,11 @@ export class JobProducer {
   async addJob(
     jobId: string,
     type: JobType,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    delay?: number  // ms 단위 지연 시간 추가
   ): Promise<void> {
     this.logger.log(
-      `BullMQ 큐 추가 시도: jobId=${jobId}, type=${type}`
+      `BullMQ 큐 추가 시도: jobId=${jobId}, type=${type}${delay ? `, delay=${delay}ms` : ''}`
     );
 
     try {
@@ -48,6 +49,7 @@ export class JobProducer {
         {
           jobId, // BullMQ 내부 ID로 DB ID 사용
           attempts,
+          delay,  // 지연 시간 옵션 추가
           backoff: {
             type: 'exponential',
             delay: 5000, // 5초부터 시작하여 지수적으로 증가

@@ -215,17 +215,18 @@ export class ScheduleService {
 
   /**
    * 실행 대상 스케줄 조회 (Runner에서 사용)
+   * - 시간 기반 조회 (runTime 매칭)
    * - 템플릿 정보 + 이미지 목록 포함
    */
-  async findSchedulesToRun() {
-    const now = new Date();
-
+  async findSchedulesToRun(currentTime: string, currentDate: string) {
     return this.prisma.schedule.findMany({
       where: {
         status: 'ACTIVE',
-        nextRunAt: {
-          lte: now,
-        },
+        runTime: currentTime,  // "09:00" 매칭
+        OR: [
+          { lastRunDate: null },  // 한 번도 실행 안됨
+          { lastRunDate: { lt: new Date(currentDate) } }  // 오늘 아직 실행 안함
+        ]
       },
       include: {
         template: {
@@ -245,50 +246,15 @@ export class ScheduleService {
   }
 
   /**
-   * 스케줄 실행 후 상태 업데이트
+   * 스케줄 실행 후 lastRunDate 업데이트
    */
   async markAsRun(id: string) {
-    const schedule = await this.prisma.schedule.findUnique({
-      where: { id },
-    });
-
-    if (!schedule) return;
-
-    const now = new Date();
-    const nextRunAt = this.calculateNextRunAt(
-      schedule.cronExpr,
-      schedule.intervalMinutes
-    );
-
     await this.prisma.schedule.update({
       where: { id },
       data: {
-        lastRunAt: now,
-        nextRunAt,
-        todayPostCount: {
-          increment: 1,
-        },
+        lastRunDate: new Date(),  // 오늘 날짜로 업데이트
       },
     });
-  }
-
-  /**
-   * 다음 실행 시간 계산
-   */
-  private calculateNextRunAt(
-    cronExpr: string | null,
-    intervalMinutes: number | null
-  ): Date {
-    const now = new Date();
-
-    // 간단한 간격 기반 계산
-    if (intervalMinutes) {
-      return new Date(now.getTime() + intervalMinutes * 60 * 1000);
-    }
-
-    // cron 표현식은 복잡하므로 기본값으로 1시간 후 설정
-    // 실제 구현에서는 cron-parser 라이브러리 사용 권장
-    return new Date(now.getTime() + 60 * 60 * 1000);
   }
 }
 

@@ -367,19 +367,20 @@ export interface Schedule {
   id: string;
   name: string;
   templateId: string;
-  cronExpr: string | null;
-  intervalMinutes: number | null;
-  maxPostsPerDay: number;
+  runTime: string; // "HH:mm" 형식 (예: "09:00")
+  dailyPostCount: number; // 하루 게시글 수
+  postIntervalMinutes: number; // 게시글 간격 (분)
   status: 'ACTIVE' | 'PAUSED' | 'ERROR';
-  lastRunAt: string | null;
-  nextRunAt: string | null;
-  todayPostCount: number;
+  lastRunDate: string | null; // 마지막 실행 날짜
   createdAt: string;
+  updatedAt: string;
   template?: {
     id: string;
     name: string;
     cafeId: string;
     boardId: string;
+    cafeName: string | null;
+    boardName: string | null;
   };
 }
 
@@ -402,6 +403,38 @@ export const scheduleApi = {
       method: 'PATCH',
       body: { status },
     }),
+
+  runNow: (id: string) =>
+    request<{ success: boolean; runId: string }>(`/schedules/${id}/run-now`, {
+      method: 'POST',
+    }),
+};
+
+// ============================================
+// ScheduleRun API
+// ============================================
+
+export interface ScheduleRun {
+  id: string;
+  scheduleId: string;
+  userId: string;
+  runDate: string;
+  status: 'PENDING' | 'RUNNING' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+  totalJobs: number;
+  completedJobs: number;
+  failedJobs: number;
+  triggeredAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+}
+
+export const scheduleRunApi = {
+  getBySchedule: (scheduleId: string, page = 1, limit = 20) =>
+    request<PaginatedResponse<ScheduleRun>>(
+      `/schedule-runs/schedule/${scheduleId}?page=${page}&limit=${limit}`
+    ),
+
+  getJobs: (runId: string) => request<Job[]>(`/schedule-runs/${runId}/jobs`),
 };
 
 // ============================================

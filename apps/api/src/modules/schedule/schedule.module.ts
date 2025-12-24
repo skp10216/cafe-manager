@@ -9,9 +9,14 @@ import { ScheduleService } from './schedule.service';
 import { ScheduleRunner } from './schedule.runner';
 import { JobModule } from '../job/job.module';
 import { TemplateModule } from '../template/template.module';
+import { ScheduleRunModule } from '../schedule-run/schedule-run.module';
 
 @Module({
-  imports: [forwardRef(() => JobModule), forwardRef(() => TemplateModule)],
+  imports: [
+    forwardRef(() => JobModule),
+    forwardRef(() => TemplateModule),
+    forwardRef(() => ScheduleRunModule),
+  ],
   controllers: [ScheduleController],
   providers: [ScheduleService, ScheduleRunner],
   exports: [ScheduleService],

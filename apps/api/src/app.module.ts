@@ -20,6 +20,7 @@ import { NaverSessionModule } from './modules/naver-session/naver-session.module
 import { NaverOAuthModule } from './modules/naver-oauth/naver-oauth.module';
 import { TemplateModule } from './modules/template/template.module';
 import { ScheduleModule as AppScheduleModule } from './modules/schedule/schedule.module';
+import { ScheduleRunModule } from './modules/schedule-run/schedule-run.module';
 import { ManagedPostModule } from './modules/managed-post/managed-post.module';
 import { JobModule } from './modules/job/job.module';
 import { UploadModule } from './modules/upload/upload.module';
@@ -78,6 +79,7 @@ import { DashboardModule } from './modules/dashboard/dashboard.module';
     UploadModule,
     TemplateModule,
     AppScheduleModule,
+    ScheduleRunModule,
     ManagedPostModule,
     JobModule,
     DashboardModule,

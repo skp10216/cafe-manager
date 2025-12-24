@@ -15,8 +15,12 @@ import {
   UseGuards,
   HttpCode,
   HttpStatus,
+  BadRequestException,
 } from '@nestjs/common';
 import { ScheduleService } from './schedule.service';
+import { ScheduleRunner } from './schedule.runner';
+import { ScheduleRunService } from '../schedule-run/schedule-run.service';
+import { PrismaService } from '@/common/prisma/prisma.service';
 import { JwtAuthGuard } from '@/common/guards/jwt-auth.guard';
 import { CurrentUser, RequestUser } from '@/common/decorators/current-user.decorator';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
@@ -27,7 +31,12 @@ import { PaginationQueryDto } from '@/common/dto/pagination.dto';
 @Controller('schedules')
 @UseGuards(JwtAuthGuard)
 export class ScheduleController {
-  constructor(private readonly scheduleService: ScheduleService) {}
+  constructor(
+    private readonly scheduleService: ScheduleService,
+    private readonly scheduleRunner: ScheduleRunner,
+    private readonly scheduleRunService: ScheduleRunService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   /**
    * 스케줄 목록 조회
@@ -96,6 +105,54 @@ export class ScheduleController {
     @Body() dto: ToggleScheduleDto
   ) {
     return this.scheduleService.toggle(id, user.userId, dto.status);
+  }
+
+  /**
+   * 스케줄 즉시 실행
+   * POST /api/schedules/:id/run-now
+   */
+  @Post(':id/run-now')
+  async runNow(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    // 1. 스케줄 조회 (권한 확인 포함)
+    await this.scheduleService.findOne(id, user.userId);
+
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10); // "2025-12-24"
+
+    // 2. 템플릿 정보 포함하여 다시 조회
+    const fullSchedule = await this.prisma.schedule.findUnique({
+      where: { id },
+      include: {
+        template: {
+          include: {
+            images: {
+              orderBy: { order: 'asc' },
+              select: { id: true, path: true, order: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!fullSchedule) {
+      throw new BadRequestException('스케줄을 찾을 수 없습니다');
+    }
+
+    // 3. ScheduleRun 생성 (중복 방지는 createOrSkip에서 처리)
+    const run = await this.scheduleRunService.createOrSkip({
+      scheduleId: id,
+      userId: user.userId,
+      runDate: new Date(today),
+    });
+
+    if (!run) {
+      throw new BadRequestException('오늘은 이미 실행되었습니다');
+    }
+
+    // 4. N개 Job 생성
+    await this.scheduleRunner.createJobsForRun(fullSchedule, run);
+
+    return { success: true, runId: run.id };
   }
 }
 

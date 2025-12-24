@@ -7,6 +7,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '@/common/prisma/prisma.service';
 import { ScheduleService } from './schedule.service';
+import { ScheduleRunService } from '../schedule-run/schedule-run.service';
 import { JobService } from '../job/job.service';
 
 @Injectable()
@@ -16,6 +17,7 @@ export class ScheduleRunner {
   constructor(
     private readonly prisma: PrismaService,
     private readonly scheduleService: ScheduleService,
+    private readonly scheduleRunService: ScheduleRunService,
     private readonly jobService: JobService
   ) {}
 
@@ -25,10 +27,28 @@ export class ScheduleRunner {
   @Cron(CronExpression.EVERY_MINUTE)
   async checkSchedules() {
     try {
-      const schedules = await this.scheduleService.findSchedulesToRun();
+      const now = new Date();
+      const currentTime = now.toTimeString().slice(0, 5);  // "09:05"
+      const currentDate = now.toISOString().slice(0, 10);  // "2025-12-24"
+
+      // 1. 실행 대상 스케줄 찾기
+      const schedules = await this.scheduleService.findSchedulesToRun(currentTime, currentDate);
 
       for (const schedule of schedules) {
-        await this.processSchedule(schedule);
+        // 2. ScheduleRun 생성 (중복 방지)
+        const run = await this.scheduleRunService.createOrSkip({
+          scheduleId: schedule.id,
+          userId: schedule.userId,
+          runDate: new Date(currentDate),
+        });
+
+        if (!run) {
+          this.logger.debug(`스케줄 ${schedule.id}: 오늘 이미 실행됨`);
+          continue;
+        }
+
+        // 3. N개 Job 생성 (간격 적용)
+        await this.createJobsForRun(schedule, run);
       }
     } catch (error) {
       this.logger.error('스케줄 확인 중 오류 발생', error);
@@ -36,82 +56,37 @@ export class ScheduleRunner {
   }
 
   /**
-   * 매일 자정에 todayPostCount 리셋
+   * 스케줄에 대해 N개 Job 생성 (간격 적용)
    */
-  @Cron(CronExpression.EVERY_DAY_AT_MIDNIGHT)
-  async resetDailyPostCounts() {
-    try {
-      const result = await this.prisma.schedule.updateMany({
-        where: { status: 'ACTIVE' },
-        data: { todayPostCount: 0 },
-      });
-      this.logger.log(`일일 포스팅 카운트 리셋: ${result.count}개 스케줄`);
-    } catch (error) {
-      this.logger.error('일일 카운트 리셋 중 오류 발생', error);
-    }
-  }
+  async createJobsForRun(schedule: any, run: any) {
+    const jobs = [];
 
-  /**
-   * 개별 스케줄 처리
-   */
-  private async processSchedule(schedule: {
-    id: string;
-    name: string;
-    userId: string;
-    templateId: string;
-    maxPostsPerDay: number;
-    todayPostCount: number;
-    template: {
-      id: string;
-      name: string;
-      cafeId: string;
-      cafeName: string | null;
-      boardId: string;
-      boardName: string | null;
-      subjectTemplate: string;
-      contentTemplate: string;
-      price: number | null;
-      tradeMethod: string | null;
-      tradeLocation: string | null;
-      variables: unknown;
-      images: Array<{ id: string; path: string; order: number }>;
-    };
-  }) {
-    try {
-      // 하루 최대 포스팅 수 확인
-      if (schedule.todayPostCount >= schedule.maxPostsPerDay) {
-        this.logger.debug(
-          `스케줄 ${schedule.id}: 오늘 최대 포스팅 수 도달 (${schedule.todayPostCount}/${schedule.maxPostsPerDay})`
-        );
-        return;
-      }
+    for (let i = 0; i < schedule.dailyPostCount; i++) {
+      const delayMinutes = i * schedule.postIntervalMinutes;
 
       // 시스템 변수 생성
       const systemVariables = this.getSystemVariables();
 
       // 템플릿 변수 치환
-      const title = this.replaceVariables(
-        schedule.template.subjectTemplate,
-        systemVariables
-      );
-      const content = this.replaceVariables(
-        schedule.template.contentTemplate,
-        systemVariables
-      );
+      const title = this.replaceVariables(schedule.template.subjectTemplate, systemVariables);
+      const content = this.replaceVariables(schedule.template.contentTemplate, systemVariables);
 
-      // 이미지 경로 목록 (순서대로)
+      // 이미지 경로 목록
       const imagePaths = schedule.template.images
         .sort((a, b) => a.order - b.order)
         .map((img) => img.path);
 
-      // 게시 Job 생성
-      await this.jobService.createJob({
+      // Job 생성 (BullMQ delay 사용)
+      const job = await this.jobService.createJob({
         type: 'CREATE_POST',
         userId: schedule.userId,
+        scheduleRunId: run.id,
+        sequenceNumber: i + 1,
+        delay: delayMinutes * 60 * 1000,  // ms 단위
         payload: {
           scheduleId: schedule.id,
           scheduleName: schedule.name,
-          templateId: schedule.templateId,
+          templateId: schedule.template.id,
           templateName: schedule.template.name,
           cafeId: schedule.template.cafeId,
           cafeName: schedule.template.cafeName,
@@ -126,18 +101,22 @@ export class ScheduleRunner {
         },
       });
 
-      // 스케줄 실행 상태 업데이트
-      await this.scheduleService.markAsRun(schedule.id);
-
-      this.logger.log(
-        `스케줄 ${schedule.id} 실행: Job 생성 완료 (이미지 ${imagePaths.length}개)`
-      );
-    } catch (error) {
-      this.logger.error(`스케줄 ${schedule.id} 처리 중 오류`, error);
-      
-      // 오류 발생 시 스케줄 상태를 ERROR로 변경할 수 있음
-      // await this.scheduleService.setError(schedule.id, error.message);
+      jobs.push(job);
     }
+
+    // ScheduleRun 통계 업데이트
+    await this.scheduleRunService.update(run.id, {
+      totalJobs: jobs.length,
+      status: 'RUNNING',
+    });
+
+    // Schedule lastRunDate 업데이트
+    await this.scheduleService.markAsRun(schedule.id);
+
+    this.logger.log(
+      `스케줄 ${schedule.id} 실행: ${jobs.length}개 Job 생성 완료 ` +
+      `(간격: ${schedule.postIntervalMinutes}분)`
+    );
   }
 
   /**
