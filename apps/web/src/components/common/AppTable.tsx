@@ -41,7 +41,7 @@ interface AppTableProps<T> {
   rows: T[];
   keyField: keyof T;
   loading?: boolean;
-  emptyMessage?: string;
+  emptyMessage?: ReactNode;
   page?: number;
   limit?: number;
   total?: number;
@@ -98,7 +98,11 @@ export default function AppTable<T extends object>({
             ) : rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={columns.length} align="center" sx={{ py: 6 }}>
-                  <Typography color="text.secondary">{emptyMessage}</Typography>
+                  {typeof emptyMessage === 'string' ? (
+                    <Typography color="text.secondary">{emptyMessage}</Typography>
+                  ) : (
+                    emptyMessage
+                  )}
                 </TableCell>
               </TableRow>
             ) : (

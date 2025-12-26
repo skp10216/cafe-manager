@@ -11,7 +11,15 @@ import {
   Max,
   MaxLength,
   Matches,
+  IsEnum,
+  ValidateIf,
 } from 'class-validator';
+
+/** 스케줄 타입: 즉시 실행 / 예약 설정 */
+export enum ScheduleType {
+  IMMEDIATE = 'IMMEDIATE', // 저장 후 바로 실행
+  SCHEDULED = 'SCHEDULED', // 예약 설정 (매일 지정 시간)
+}
 
 export class CreateScheduleDto {
   @IsString()
@@ -23,11 +31,17 @@ export class CreateScheduleDto {
   @MaxLength(100)
   name: string;
 
-  /** 실행 시간 (HH:mm 형식, 예: "09:00") */
+  /** 스케줄 타입 (IMMEDIATE: 즉시 실행, SCHEDULED: 예약 설정) */
+  @IsOptional()
+  @IsEnum(ScheduleType, { message: '스케줄 타입은 IMMEDIATE 또는 SCHEDULED만 가능합니다' })
+  scheduleType?: ScheduleType;
+
+  /** 실행 시간 (HH:mm 형식, 예: "09:00") - SCHEDULED 타입에서만 필수 */
+  @ValidateIf((o) => o.scheduleType !== ScheduleType.IMMEDIATE)
   @IsString()
   @IsNotEmpty({ message: '실행 시간을 입력하세요' })
   @Matches(/^\d{2}:\d{2}$/, { message: '실행 시간은 HH:mm 형식이어야 합니다 (예: 09:00)' })
-  runTime: string;
+  runTime?: string;
 
   /** 하루 게시글 수 (기본값: 10) */
   @IsOptional()

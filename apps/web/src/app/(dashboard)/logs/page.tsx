@@ -2,7 +2,7 @@
 
 /**
  * 작업 로그 페이지
- * Job 목록 조회 + 필터링 + 상세 보기
+ * Job 목록 조회 + 필터링 + 상세 보기 + 삭제
  */
 
 import { useEffect, useState, useCallback } from 'react';
@@ -29,6 +29,14 @@ import {
   ListItem,
   ListItemIcon,
   ListItemText,
+  Checkbox,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogContentText,
+  DialogActions,
+  Menu,
+  Divider,
 } from '@mui/material';
 import {
   Refresh,
@@ -40,11 +48,16 @@ import {
   Article,
   Login,
   Delete,
+  DeleteSweep,
   Info,
   Warning,
   BugReport,
+  MoreVert,
+  CheckCircle,
+  Cancel,
+  History,
 } from '@mui/icons-material';
-import { jobApi, Job, JobLog } from '@/lib/api-client';
+import { jobApi, Job, JobLog, DeleteFilterType } from '@/lib/api-client';
 import StatusChip from '@/components/common/StatusChip';
 import { useToast } from '@/components/common/ToastProvider';
 
@@ -136,6 +149,13 @@ export default function LogsPage() {
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
   const [jobLogs, setJobLogs] = useState<JobLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(false);
+
+  // 선택 및 삭제 상태
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteType, setDeleteType] = useState<'selected' | DeleteFilterType>('selected');
+  const [deleteLoading, setDeleteLoading] = useState(false);
+  const [deleteMenuAnchor, setDeleteMenuAnchor] = useState<null | HTMLElement>(null);
 
   // ==============================================
   // 날짜 범위 계산
@@ -238,7 +258,95 @@ export default function LogsPage() {
 
   const handleRefresh = () => {
     loadJobs();
+    setSelectedIds(new Set()); // 선택 초기화
     toast.info('목록을 새로고침했습니다');
+  };
+
+  // ==============================================
+  // 선택 및 삭제 핸들러
+  // ==============================================
+
+  /** 전체 선택/해제 (진행 중인 작업 제외) */
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      const selectableIds = jobs
+        .filter((job) => job.status !== 'PENDING' && job.status !== 'PROCESSING')
+        .map((job) => job.id);
+      setSelectedIds(new Set(selectableIds));
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
+
+  /** 개별 선택/해제 */
+  const handleSelectOne = (jobId: string, checked: boolean) => {
+    const newSelected = new Set(selectedIds);
+    if (checked) {
+      newSelected.add(jobId);
+    } else {
+      newSelected.delete(jobId);
+    }
+    setSelectedIds(newSelected);
+  };
+
+  /** 선택 가능한 작업 수 (진행 중인 작업 제외) */
+  const selectableCount = jobs.filter(
+    (job) => job.status !== 'PENDING' && job.status !== 'PROCESSING'
+  ).length;
+
+  /** 삭제 다이얼로그 열기 */
+  const openDeleteDialog = (type: 'selected' | DeleteFilterType) => {
+    setDeleteType(type);
+    setDeleteDialogOpen(true);
+    setDeleteMenuAnchor(null);
+  };
+
+  /** 삭제 다이얼로그 닫기 */
+  const closeDeleteDialog = () => {
+    setDeleteDialogOpen(false);
+  };
+
+  /** 삭제 실행 */
+  const handleDelete = async () => {
+    setDeleteLoading(true);
+    try {
+      let result;
+      
+      if (deleteType === 'selected') {
+        // 선택 삭제
+        result = await jobApi.deleteByIds(Array.from(selectedIds));
+      } else {
+        // 필터 기반 삭제
+        result = await jobApi.deleteByFilter(deleteType);
+      }
+
+      toast.success(result.message);
+      setSelectedIds(new Set());
+      loadJobs(); // 목록 새로고침
+    } catch (error) {
+      toast.error('삭제에 실패했습니다');
+    } finally {
+      setDeleteLoading(false);
+      setDeleteDialogOpen(false);
+    }
+  };
+
+  /** 삭제 타입별 라벨 */
+  const getDeleteTypeLabel = () => {
+    switch (deleteType) {
+      case 'selected':
+        return `선택한 ${selectedIds.size}개 작업`;
+      case 'ALL':
+        return '완료/실패한 모든 작업';
+      case 'COMPLETED':
+        return '완료된 모든 작업';
+      case 'FAILED':
+        return '실패한 모든 작업';
+      case 'OLD':
+        return '30일 이상 지난 작업';
+      default:
+        return '작업';
+    }
   };
 
   // ==============================================
@@ -257,9 +365,64 @@ export default function LogsPage() {
             모든 자동화 작업의 실행 기록을 확인하세요
           </Typography>
         </Box>
-        <Button variant="outlined" startIcon={<Refresh />} onClick={handleRefresh}>
-          새로고침
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          {/* 선택 삭제 버튼 (선택된 항목이 있을 때만 표시) */}
+          {selectedIds.size > 0 && (
+            <Button
+              variant="outlined"
+              color="error"
+              startIcon={<Delete />}
+              onClick={() => openDeleteDialog('selected')}
+            >
+              선택 삭제 ({selectedIds.size})
+            </Button>
+          )}
+
+          {/* 일괄 삭제 메뉴 버튼 */}
+          <Button
+            variant="outlined"
+            color="error"
+            startIcon={<DeleteSweep />}
+            onClick={(e) => setDeleteMenuAnchor(e.currentTarget)}
+          >
+            일괄 삭제
+          </Button>
+          <Menu
+            anchorEl={deleteMenuAnchor}
+            open={Boolean(deleteMenuAnchor)}
+            onClose={() => setDeleteMenuAnchor(null)}
+          >
+            <MenuItem onClick={() => openDeleteDialog('ALL')}>
+              <ListItemIcon>
+                <DeleteSweep fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary="전체 삭제" secondary="완료/실패한 모든 작업" />
+            </MenuItem>
+            <MenuItem onClick={() => openDeleteDialog('COMPLETED')}>
+              <ListItemIcon>
+                <CheckCircle fontSize="small" color="success" />
+              </ListItemIcon>
+              <ListItemText primary="완료된 작업 삭제" />
+            </MenuItem>
+            <MenuItem onClick={() => openDeleteDialog('FAILED')}>
+              <ListItemIcon>
+                <Cancel fontSize="small" color="error" />
+              </ListItemIcon>
+              <ListItemText primary="실패한 작업 삭제" />
+            </MenuItem>
+            <Divider />
+            <MenuItem onClick={() => openDeleteDialog('OLD')}>
+              <ListItemIcon>
+                <History fontSize="small" />
+              </ListItemIcon>
+              <ListItemText primary="오래된 작업 삭제" secondary="30일 이상 경과" />
+            </MenuItem>
+          </Menu>
+
+          <Button variant="outlined" startIcon={<Refresh />} onClick={handleRefresh}>
+            새로고침
+          </Button>
+        </Box>
       </Box>
 
       {/* 필터 */}
@@ -399,6 +562,14 @@ export default function LogsPage() {
         <Table>
           <TableHead>
             <TableRow>
+              <TableCell padding="checkbox">
+                <Checkbox
+                  indeterminate={selectedIds.size > 0 && selectedIds.size < selectableCount}
+                  checked={selectableCount > 0 && selectedIds.size === selectableCount}
+                  onChange={(e) => handleSelectAll(e.target.checked)}
+                  disabled={selectableCount === 0}
+                />
+              </TableCell>
               <TableCell>유형</TableCell>
               <TableCell>상태</TableCell>
               <TableCell>스케줄/템플릿</TableCell>
@@ -413,7 +584,7 @@ export default function LogsPage() {
               // 로딩 스켈레톤
               [...Array(5)].map((_, i) => (
                 <TableRow key={i}>
-                  {[...Array(7)].map((_, j) => (
+                  {[...Array(8)].map((_, j) => (
                     <TableCell key={j}>
                       <Skeleton />
                     </TableCell>
@@ -423,7 +594,7 @@ export default function LogsPage() {
             ) : jobs.length === 0 ? (
               // 빈 상태
               <TableRow>
-                <TableCell colSpan={7} align="center" sx={{ py: 4 }}>
+                <TableCell colSpan={8} align="center" sx={{ py: 4 }}>
                   <Typography color="text.secondary">작업 기록이 없습니다</Typography>
                 </TableCell>
               </TableRow>
@@ -439,14 +610,24 @@ export default function LogsPage() {
                           1000
                       )
                     : null;
+                const isSelectable = job.status !== 'PENDING' && job.status !== 'PROCESSING';
+                const isSelected = selectedIds.has(job.id);
 
                 return (
                   <TableRow
                     key={job.id}
                     hover
+                    selected={isSelected}
                     sx={{ cursor: 'pointer' }}
                     onClick={() => handleOpenDetail(job)}
                   >
+                    <TableCell padding="checkbox" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={isSelected}
+                        disabled={!isSelectable}
+                        onChange={(e) => handleSelectOne(job.id, e.target.checked)}
+                      />
+                    </TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                         <TypeIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
@@ -768,6 +949,46 @@ export default function LogsPage() {
           </Box>
         )}
       </Drawer>
+
+      {/* 삭제 확인 다이얼로그 */}
+      <Dialog
+        open={deleteDialogOpen}
+        onClose={closeDeleteDialog}
+        maxWidth="xs"
+        fullWidth
+      >
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <Delete color="error" />
+          작업 로그 삭제
+        </DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            <strong>{getDeleteTypeLabel()}</strong>을(를) 삭제하시겠습니까?
+          </DialogContentText>
+          <DialogContentText sx={{ mt: 1, color: 'error.main' }}>
+            ⚠️ 삭제된 로그는 복구할 수 없습니다.
+          </DialogContentText>
+          {deleteType !== 'selected' && (
+            <DialogContentText sx={{ mt: 1, fontSize: '0.875rem' }}>
+              * 진행 중인 작업(대기 중, 처리 중)은 삭제되지 않습니다.
+            </DialogContentText>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeDeleteDialog} disabled={deleteLoading}>
+            취소
+          </Button>
+          <Button
+            onClick={handleDelete}
+            color="error"
+            variant="contained"
+            disabled={deleteLoading}
+            startIcon={deleteLoading ? undefined : <Delete />}
+          >
+            {deleteLoading ? '삭제 중...' : '삭제'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }

@@ -87,11 +87,15 @@ export class ScheduleService {
    * 스케줄 생성
    */
   async create(userId: string, dto: CreateScheduleDto) {
-    // runTime은 필수 (HH:mm 형식)
-    if (!dto.runTime || !/^\d{2}:\d{2}$/.test(dto.runTime)) {
-      throw new BadRequestException(
-        '실행 시간(runTime)은 HH:mm 형식으로 입력하세요 (예: 09:00)'
-      );
+    const isImmediate = dto.scheduleType === 'IMMEDIATE';
+
+    // SCHEDULED 타입일 때만 runTime 검증
+    if (!isImmediate) {
+      if (!dto.runTime || !/^\d{2}:\d{2}$/.test(dto.runTime)) {
+        throw new BadRequestException(
+          '실행 시간(runTime)은 HH:mm 형식으로 입력하세요 (예: 09:00)'
+        );
+      }
     }
 
     // 템플릿 존재 및 소유권 확인
@@ -107,18 +111,23 @@ export class ScheduleService {
       throw new ForbiddenException('해당 템플릿에 접근할 수 없습니다');
     }
 
-    return this.prisma.schedule.create({
+    // 스케줄 생성
+    const schedule = await this.prisma.schedule.create({
       data: {
         userId,
         templateId: dto.templateId,
         name: dto.name,
-        runTime: dto.runTime,
+        scheduleType: isImmediate ? 'IMMEDIATE' : 'SCHEDULED',
+        runTime: dto.runTime || '09:00', // IMMEDIATE 타입은 기본값 사용
         dailyPostCount: dto.dailyPostCount ?? 10,
         postIntervalMinutes: dto.postIntervalMinutes ?? 5,
         timezone: dto.timezone ?? 'Asia/Seoul',
-        status: 'PAUSED', // 기본값은 비활성화 (사용자가 직접 활성화)
-        userEnabled: false, // 기본값은 비활성화 (사용자가 직접 활성화)
+        // IMMEDIATE 타입은 즉시 활성화, SCHEDULED 타입은 비활성화 상태로 시작
+        status: isImmediate ? 'ACTIVE' : 'PAUSED',
+        userEnabled: isImmediate, // IMMEDIATE면 즉시 활성화
         adminStatus: 'APPROVED', // 자동 승인 처리
+        nextPostAt: null,
+        todayPostedCount: 0,
       },
       include: {
         template: {
@@ -131,6 +140,8 @@ export class ScheduleService {
         },
       },
     });
+
+    return schedule;
   }
 
   /**
@@ -181,19 +192,43 @@ export class ScheduleService {
 
   /**
    * 스케줄 상태 토글 (레거시 status 필드 사용)
+   * [변경됨] 활성화 시 nextPostAt 초기화
    */
   async toggle(id: string, userId: string, status: ScheduleStatus) {
     // 소유권 확인
-    await this.findOne(id, userId);
+    const schedule = await this.findOne(id, userId);
+    const enabled = status === 'ACTIVE';
 
-    const updateData: Record<string, unknown> = { 
-      status,
-      userEnabled: status === 'ACTIVE', // userEnabled도 함께 업데이트
-    };
+    // 활성화 시 nextPostAt 초기화
+    let nextPostAt: Date | null = null;
+    let todayPostedCount = schedule.todayPostedCount;
+
+    if (enabled) {
+      const now = new Date();
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+
+      const [hours, minutes] = schedule.runTime.split(':').map(Number);
+      const todayRunTime = new Date(todayStart);
+      todayRunTime.setHours(hours, minutes, 0, 0);
+
+      // 오늘 runTime이 지났으면 즉시 시작, 아니면 runTime에 시작
+      nextPostAt = now > todayRunTime ? now : todayRunTime;
+
+      // 하루가 바뀌었으면 카운터 초기화
+      if (!schedule.lastRunDate || schedule.lastRunDate < todayStart) {
+        todayPostedCount = 0;
+      }
+    }
 
     return this.prisma.schedule.update({
       where: { id },
-      data: updateData,
+      data: { 
+        status,
+        userEnabled: enabled,
+        nextPostAt,
+        todayPostedCount,
+      },
       include: {
         template: {
           select: {
@@ -207,16 +242,41 @@ export class ScheduleService {
 
   /**
    * 사용자 활성화 토글 (userEnabled)
+   * [변경됨] 활성화 시 nextPostAt 초기화
    */
   async toggleUserEnabled(id: string, userId: string, enabled: boolean) {
     // 소유권 확인
-    await this.findOne(id, userId);
+    const schedule = await this.findOne(id, userId);
+
+    // 활성화 시 nextPostAt 초기화
+    let nextPostAt: Date | null = null;
+    let todayPostedCount = schedule.todayPostedCount;
+
+    if (enabled) {
+      const now = new Date();
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+
+      const [hours, minutes] = schedule.runTime.split(':').map(Number);
+      const todayRunTime = new Date(todayStart);
+      todayRunTime.setHours(hours, minutes, 0, 0);
+
+      // 오늘 runTime이 지났으면 즉시 시작, 아니면 runTime에 시작
+      nextPostAt = now > todayRunTime ? now : todayRunTime;
+
+      // 하루가 바뀌었으면 카운터 초기화
+      if (!schedule.lastRunDate || schedule.lastRunDate < todayStart) {
+        todayPostedCount = 0;
+      }
+    }
 
     return this.prisma.schedule.update({
       where: { id },
       data: {
         userEnabled: enabled,
         status: enabled ? 'ACTIVE' : 'PAUSED', // 레거시 호환
+        nextPostAt,
+        todayPostedCount,
       },
       include: {
         template: {

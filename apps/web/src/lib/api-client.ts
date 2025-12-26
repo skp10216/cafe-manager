@@ -367,10 +367,14 @@ export interface Schedule {
   id: string;
   name: string;
   templateId: string;
-  runTime: string; // "HH:mm" 형식 (예: "09:00")
+  scheduleType: 'IMMEDIATE' | 'SCHEDULED'; // 즉시 실행 / 예약 설정
+  runTime: string; // "HH:mm" 형식 (예: "09:00") - SCHEDULED 타입에서만 사용
   dailyPostCount: number; // 하루 게시글 수
   postIntervalMinutes: number; // 게시글 간격 (분)
   status: 'ACTIVE' | 'PAUSED' | 'ERROR';
+  userEnabled?: boolean; // 사용자가 설정한 활성화 상태
+  adminStatus?: 'APPROVED' | 'NEEDS_REVIEW' | 'SUSPENDED' | 'BLOCKED'; // 관리자 승인 상태
+  adminReason?: string; // 관리자 중지/차단 사유
   lastRunDate: string | null; // 마지막 실행 날짜
   createdAt: string;
   updatedAt: string;
@@ -511,7 +515,17 @@ export interface JobLog {
   createdAt: string;
 }
 
+/** 삭제 필터 타입 */
+export type DeleteFilterType = 'ALL' | 'COMPLETED' | 'FAILED' | 'OLD';
+
+/** 삭제 결과 응답 */
+export interface DeleteJobsResult {
+  deletedCount: number;
+  message: string;
+}
+
 export const jobApi = {
+  /** 작업 목록 조회 */
   list: (params?: {
     page?: number;
     limit?: number;
@@ -534,10 +548,13 @@ export const jobApi = {
     return request<PaginatedResponse<Job>>(`/jobs?${query}`);
   },
 
+  /** 작업 상세 조회 */
   get: (id: string) => request<Job>(`/jobs/${id}`),
 
+  /** 작업 로그 조회 */
   logs: (id: string) => request<JobLog[]>(`/jobs/${id}/logs`),
 
+  /** 최근 작업 요약 (대시보드용) */
   recentSummary: () =>
     request<{
       todayCount: number;
@@ -549,6 +566,28 @@ export const jobApi = {
         failed: number;
       };
     }>('/jobs/summary/recent'),
+
+  // ========================================
+  // 삭제 API
+  // ========================================
+
+  /** 선택한 작업들 삭제 (다중 삭제) */
+  deleteByIds: (ids: string[]) =>
+    request<DeleteJobsResult>('/jobs/delete', {
+      method: 'POST',
+      body: { ids },
+    }),
+
+  /** 필터 기반 작업 삭제 (전체/완료/실패/오래된 작업) */
+  deleteByFilter: (filter: DeleteFilterType, beforeDate?: string) =>
+    request<DeleteJobsResult>('/jobs/delete-by-filter', {
+      method: 'POST',
+      body: { filter, beforeDate },
+    }),
+
+  /** 단일 작업 삭제 */
+  delete: (id: string) =>
+    request<DeleteJobsResult>(`/jobs/${id}`, { method: 'DELETE' }),
 };
 
 // ============================================

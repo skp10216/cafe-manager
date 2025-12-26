@@ -20,6 +20,7 @@ import {
   Chip,
   alpha,
   Stack,
+  Theme,
 } from '@mui/material';
 import {
   Add,
@@ -37,12 +38,148 @@ import {
   Schedule,
   AccessTime,
   Description,
+  Bolt,
+  CalendarMonth,
 } from '@mui/icons-material';
 import AppCard from '@/components/common/AppCard';
 import AppButton from '@/components/common/AppButton';
 import AppTable, { Column } from '@/components/common/AppTable';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import { scheduleApi, dashboardApi, Schedule as ScheduleType } from '@/lib/api-client';
+
+/** 실행 설정 미리보기 컴포넌트 */
+function ExecutionPreview({
+  scheduleType,
+  runTime,
+  dailyPostCount,
+  postIntervalMinutes,
+}: {
+  scheduleType: 'IMMEDIATE' | 'SCHEDULED';
+  runTime: string;
+  dailyPostCount: number;
+  postIntervalMinutes: number;
+}) {
+  const isImmediate = scheduleType === 'IMMEDIATE';
+
+  // 총 소요 시간 계산 (분)
+  const totalDuration = (dailyPostCount - 1) * postIntervalMinutes;
+
+  // 예상 게시 시간 목록 생성
+  const getPostTimes = () => {
+    if (isImmediate) return null;
+
+    const times: string[] = [];
+    const [hours, minutes] = runTime.split(':').map(Number);
+    let currentMinutes = hours * 60 + minutes;
+
+    for (let i = 0; i < Math.min(dailyPostCount, 3); i++) {
+      const h = Math.floor(currentMinutes / 60) % 24;
+      const m = currentMinutes % 60;
+      times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+      currentMinutes += postIntervalMinutes;
+    }
+
+    return times;
+  };
+
+  const postTimes = getPostTimes();
+
+  // 소요 시간 포맷팅
+  const formatDuration = (minutes: number) => {
+    if (minutes < 60) return `${minutes}분`;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m > 0 ? `${h}시간 ${m}분` : `${h}시간`;
+  };
+
+  return (
+    <Box>
+      {/* 실행 타입 배지 */}
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
+        <Chip
+          size="small"
+          icon={isImmediate ? <Bolt sx={{ fontSize: 14 }} /> : <CalendarMonth sx={{ fontSize: 14 }} />}
+          label={isImmediate ? '즉시 실행' : '예약 설정'}
+          sx={{
+            height: 22,
+            fontWeight: 600,
+            fontSize: '0.7rem',
+            bgcolor: (theme) =>
+              alpha(isImmediate ? theme.palette.success.main : theme.palette.primary.main, 0.1),
+            color: isImmediate ? 'success.dark' : 'primary.dark',
+            '& .MuiChip-icon': { ml: 0.5, color: 'inherit' },
+            '& .MuiChip-label': { px: 0.75 },
+          }}
+        />
+        {!isImmediate && (
+          <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
+            {runTime} 시작
+          </Typography>
+        )}
+      </Box>
+
+      {/* 실행 미리보기 문구 */}
+      <Box sx={{ pl: 0.25 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            color: 'text.secondary',
+            display: 'block',
+            lineHeight: 1.5,
+          }}
+        >
+          {isImmediate ? (
+            <>
+              <Box component="span" sx={{ fontWeight: 500, color: 'success.main' }}>
+                저장 즉시
+              </Box>
+              {' '}게시 시작 →{' '}
+              <Box component="span" sx={{ fontWeight: 500 }}>
+                {dailyPostCount}개
+              </Box>
+              를{' '}
+              <Box component="span" sx={{ fontWeight: 500 }}>
+                {postIntervalMinutes}분 간격
+              </Box>
+              으로 게시
+            </>
+          ) : (
+            <>
+              {postTimes && postTimes.length > 0 && (
+                <>
+                  <Box component="span" sx={{ fontWeight: 500, color: 'primary.main' }}>
+                    {postTimes[0]}
+                  </Box>
+                  {postTimes.slice(1).map((time, idx) => (
+                    <span key={idx}> → {time}</span>
+                  ))}
+                  {dailyPostCount > 3 && (
+                    <span> → ... 외 {dailyPostCount - 3}개</span>
+                  )}
+                </>
+              )}
+            </>
+          )}
+        </Typography>
+
+        {/* 총 소요 시간 안내 */}
+        {dailyPostCount > 1 && (
+          <Typography
+            variant="caption"
+            sx={{
+              color: 'text.disabled',
+              fontSize: '0.7rem',
+              display: 'block',
+              mt: 0.25,
+            }}
+          >
+            약 {formatDuration(totalDuration)} 소요 · 총 {dailyPostCount}개 게시
+          </Typography>
+        )}
+      </Box>
+    </Box>
+  );
+}
 
 /** 실행 상태 뱃지 컴포넌트 */
 function ExecutionStatusBadge({
@@ -130,8 +267,8 @@ export default function SchedulesPage() {
     try {
       const integrationStatus = await dashboardApi.getIntegrationStatus();
       const status = integrationStatus.session?.status;
-      // HEALTHY 또는 EXPIRING이면 실행 가능
-      setSessionHealthy(status === 'HEALTHY' || status === 'EXPIRING');
+      // ACTIVE면 실행 가능
+      setSessionHealthy(status === 'ACTIVE');
     } catch (error) {
       console.error('세션 상태 로딩 실패:', error);
       setSessionHealthy(false);
@@ -204,11 +341,20 @@ export default function SchedulesPage() {
     }
   };
 
-  const calculateNextRun = (schedule: ScheduleType): { text: string; isActive: boolean } => {
+  const calculateNextRun = (schedule: ScheduleType): { text: string; subText?: string; isActive: boolean } => {
     // 실행 불가 조건
     if (!schedule.userEnabled) return { text: '-', isActive: false };
     if (schedule.adminStatus !== 'APPROVED') return { text: '-', isActive: false };
     if (!sessionHealthy) return { text: '-', isActive: false };
+
+    // 즉시 실행 타입
+    if (schedule.scheduleType === 'IMMEDIATE') {
+      return {
+        text: '활성화 시 즉시',
+        subText: '저장 후 바로 시작',
+        isActive: true,
+      };
+    }
 
     try {
       const now = new Date();
@@ -223,8 +369,17 @@ export default function SchedulesPage() {
       const isToday = nextRun.getDate() === now.getDate();
       const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
 
+      // 남은 시간 계산
+      const diffMs = nextRun.getTime() - now.getTime();
+      const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
+      const diffMinutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+      const remainingText = diffHours > 0 
+        ? `${diffHours}시간 ${diffMinutes}분 후`
+        : `${diffMinutes}분 후`;
+
       return {
         text: isToday ? `오늘 ${timeStr}` : `내일 ${timeStr}`,
+        subText: remainingText,
         isActive: true,
       };
     } catch {
@@ -286,37 +441,56 @@ export default function SchedulesPage() {
     {
       id: 'summary',
       label: '실행 설정',
-      minWidth: 180,
+      minWidth: 240,
       render: (row: ScheduleType) => (
-        <Box>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, mb: 0.25 }}>
-            <AccessTime sx={{ fontSize: 14, color: 'text.secondary' }} />
-            <Typography variant="body2" sx={{ fontWeight: 500 }}>
-              매일 {row.runTime}
-            </Typography>
-          </Box>
-          <Typography variant="caption" color="text.secondary">
-            {row.dailyPostCount}개 · {row.postIntervalMinutes}분 간격
-          </Typography>
-        </Box>
+        <ExecutionPreview
+          scheduleType={row.scheduleType || 'SCHEDULED'}
+          runTime={row.runTime}
+          dailyPostCount={row.dailyPostCount}
+          postIntervalMinutes={row.postIntervalMinutes}
+        />
       ),
     },
     {
       id: 'nextRun',
       label: '다음 실행',
-      minWidth: 120,
+      minWidth: 130,
       render: (row: ScheduleType) => {
         const nextRun = calculateNextRun(row);
+        const isImmediate = row.scheduleType === 'IMMEDIATE';
+
         return (
-          <Typography
-            variant="body2"
-            sx={{
-              fontWeight: nextRun.isActive ? 600 : 400,
-              color: nextRun.isActive ? 'primary.main' : 'text.disabled',
-            }}
-          >
-            {nextRun.text}
-          </Typography>
+          <Box>
+            <Typography
+              variant="body2"
+              sx={{
+                fontWeight: nextRun.isActive ? 600 : 400,
+                color: nextRun.isActive
+                  ? isImmediate
+                    ? 'success.main'
+                    : 'primary.main'
+                  : 'text.disabled',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.5,
+              }}
+            >
+              {isImmediate && nextRun.isActive && <Bolt sx={{ fontSize: 14 }} />}
+              {nextRun.text}
+            </Typography>
+            {nextRun.subText && nextRun.isActive && (
+              <Typography
+                variant="caption"
+                sx={{
+                  color: 'text.disabled',
+                  fontSize: '0.7rem',
+                  display: 'block',
+                }}
+              >
+                {nextRun.subText}
+              </Typography>
+            )}
+          </Box>
         );
       },
     },
@@ -455,7 +629,7 @@ export default function SchedulesPage() {
           borderRadius: 3,
           overflow: 'hidden',
           '& .MuiTableHead-root': {
-            bgcolor: (theme) => alpha(theme.palette.grey[100], 0.5),
+            bgcolor: (theme: Theme) => alpha(theme.palette.grey[100], 0.5),
           },
           '& .MuiTableCell-head': {
             fontWeight: 600,

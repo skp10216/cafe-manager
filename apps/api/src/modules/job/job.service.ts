@@ -12,6 +12,7 @@ import {
 import { PrismaService } from '@/common/prisma/prisma.service';
 import { JobProducer } from './job.producer';
 import { JobQueryDto } from './dto/job-query.dto';
+import { DeleteFilterType, DeleteJobsResult } from './dto/delete-jobs.dto';
 import {
     PaginatedResponse,
     createPaginationMeta,
@@ -405,6 +406,180 @@ export class JobService {
                     : Prisma.DbNull,
             },
         });
+    }
+
+    // ========================================
+    // 삭제 관련 메서드
+    // ========================================
+
+    /**
+     * 선택한 작업들 삭제
+     * @param userId 사용자 ID
+     * @param jobIds 삭제할 Job ID 배열
+     */
+    async deleteByIds(userId: string, jobIds: string[]): Promise<DeleteJobsResult> {
+        if (jobIds.length === 0) {
+            return { deletedCount: 0, message: '삭제할 작업이 없습니다' };
+        }
+
+        // 트랜잭션으로 Job과 관련 JobLog 함께 삭제
+        const result = await this.prisma.$transaction(async (tx) => {
+            // 1. 해당 사용자의 Job인지 확인 후 삭제할 ID 필터링
+            const jobsToDelete = await tx.job.findMany({
+                where: {
+                    id: { in: jobIds },
+                    userId,
+                },
+                select: { id: true },
+            });
+
+            const validIds = jobsToDelete.map(j => j.id);
+
+            if (validIds.length === 0) {
+                return { deletedCount: 0 };
+            }
+
+            // 2. 관련 JobLog 먼저 삭제
+            await tx.jobLog.deleteMany({
+                where: { jobId: { in: validIds } },
+            });
+
+            // 3. Job 삭제
+            const deleteResult = await tx.job.deleteMany({
+                where: { id: { in: validIds } },
+            });
+
+            return { deletedCount: deleteResult.count };
+        });
+
+        this.logger.log(`사용자 ${userId}의 작업 ${result.deletedCount}개 삭제 완료`);
+
+        return {
+            deletedCount: result.deletedCount,
+            message: `${result.deletedCount}개의 작업이 삭제되었습니다`,
+        };
+    }
+
+    /**
+     * 필터 기반 작업 삭제
+     * @param userId 사용자 ID
+     * @param filter 삭제 필터 타입
+     * @param beforeDate 기준 날짜 (OLD 필터용)
+     */
+    async deleteByFilter(
+        userId: string,
+        filter: DeleteFilterType,
+        beforeDate?: string
+    ): Promise<DeleteJobsResult> {
+        const where: Prisma.JobWhereInput = { userId };
+
+        switch (filter) {
+            case DeleteFilterType.ALL:
+                // 모든 작업 삭제 (진행 중인 작업 제외)
+                where.status = { notIn: ['PENDING', 'PROCESSING'] };
+                break;
+
+            case DeleteFilterType.COMPLETED:
+                where.status = 'COMPLETED';
+                break;
+
+            case DeleteFilterType.FAILED:
+                where.status = 'FAILED';
+                break;
+
+            case DeleteFilterType.OLD:
+                // 기본: 30일 이전 작업
+                const cutoffDate = beforeDate
+                    ? new Date(beforeDate)
+                    : new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+                where.createdAt = { lt: cutoffDate };
+                where.status = { notIn: ['PENDING', 'PROCESSING'] };
+                break;
+
+            default:
+                return { deletedCount: 0, message: '유효하지 않은 필터입니다' };
+        }
+
+        // 트랜잭션으로 삭제
+        const result = await this.prisma.$transaction(async (tx) => {
+            // 1. 삭제 대상 Job ID 조회
+            const jobsToDelete = await tx.job.findMany({
+                where,
+                select: { id: true },
+            });
+
+            const jobIds = jobsToDelete.map(j => j.id);
+
+            if (jobIds.length === 0) {
+                return { deletedCount: 0 };
+            }
+
+            // 2. 관련 JobLog 먼저 삭제
+            await tx.jobLog.deleteMany({
+                where: { jobId: { in: jobIds } },
+            });
+
+            // 3. Job 삭제
+            const deleteResult = await tx.job.deleteMany({
+                where: { id: { in: jobIds } },
+            });
+
+            return { deletedCount: deleteResult.count };
+        });
+
+        const filterLabels: Record<DeleteFilterType, string> = {
+            [DeleteFilterType.ALL]: '전체',
+            [DeleteFilterType.COMPLETED]: '완료된',
+            [DeleteFilterType.FAILED]: '실패한',
+            [DeleteFilterType.OLD]: '오래된',
+        };
+
+        this.logger.log(
+            `사용자 ${userId}의 ${filterLabels[filter]} 작업 ${result.deletedCount}개 삭제 완료`
+        );
+
+        return {
+            deletedCount: result.deletedCount,
+            message: `${filterLabels[filter]} 작업 ${result.deletedCount}개가 삭제되었습니다`,
+        };
+    }
+
+    /**
+     * 단일 작업 삭제
+     * @param userId 사용자 ID
+     * @param jobId 삭제할 Job ID
+     */
+    async deleteOne(userId: string, jobId: string): Promise<DeleteJobsResult> {
+        // 소유권 확인
+        const job = await this.prisma.job.findUnique({
+            where: { id: jobId },
+        });
+
+        if (!job) {
+            throw new NotFoundException('작업을 찾을 수 없습니다');
+        }
+
+        if (job.userId !== userId) {
+            throw new ForbiddenException('접근 권한이 없습니다');
+        }
+
+        // 진행 중인 작업은 삭제 불가
+        if (job.status === 'PENDING' || job.status === 'PROCESSING') {
+            throw new ForbiddenException('진행 중인 작업은 삭제할 수 없습니다');
+        }
+
+        // 트랜잭션으로 삭제
+        await this.prisma.$transaction(async (tx) => {
+            await tx.jobLog.deleteMany({ where: { jobId } });
+            await tx.job.delete({ where: { id: jobId } });
+        });
+
+        this.logger.log(`작업 ${jobId} 삭제 완료`);
+
+        return {
+            deletedCount: 1,
+            message: '작업이 삭제되었습니다',
+        };
     }
 }
 

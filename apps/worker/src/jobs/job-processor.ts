@@ -529,6 +529,8 @@ export class JobProcessor {
       tradeMethod,
       tradeLocation,
       naverAccountId,
+      currentPostNumber,
+      totalPosts,
     } = payload as {
       cafeId: string;
       boardId: string;
@@ -539,13 +541,22 @@ export class JobProcessor {
       tradeMethod?: 'DIRECT' | 'DELIVERY' | 'BOTH';
       tradeLocation?: string;
       naverAccountId?: string;
+      currentPostNumber?: number;
+      totalPosts?: number;
     };
 
-    await this.addLog(jobId, 'INFO', `게시글 작성 시작: ${cafeId}/${boardId}`, {
+    // 진행 상황 표시 (예: "[2/3]" 또는 빈 문자열)
+    const progressText = (currentPostNumber && totalPosts)
+      ? `[${currentPostNumber}/${totalPosts}] `
+      : '';
+
+    await this.addLog(jobId, 'INFO', `${progressText}게시글 작성 시작: ${cafeId}/${boardId}`, {
       title,
       imageCount: imagePaths.length,
       hasPrice: !!price,
       runMode,
+      currentPostNumber,
+      totalPosts,
     });
 
     // 작업 소유자 및 활성 세션 찾기
@@ -590,7 +601,7 @@ export class JobProcessor {
 
     try {
       // 1. 로그인 상태 확인
-      await this.addLog(jobId, 'INFO', '로그인 상태 확인 중...');
+      await this.addLog(jobId, 'INFO', `${progressText}로그인 상태 확인 중...`);
       const isLoggedIn = await client.isLoggedIn();
 
       if (!isLoggedIn) {
@@ -624,7 +635,7 @@ export class JobProcessor {
       }
 
       // 2. 게시글 작성
-      await this.addLog(jobId, 'INFO', '게시글 작성 중...');
+      await this.addLog(jobId, 'INFO', `${progressText}게시글 작성 중...`);
 
       const result = await client.createPost({
         cafeId,
@@ -644,10 +655,12 @@ export class JobProcessor {
       }
 
       // 3. 성공 로그
-      await this.addLog(jobId, 'INFO', `게시글 작성 완료: ${result.articleUrl}`, {
+      await this.addLog(jobId, 'INFO', `${progressText}게시글 작성 완료: ${result.articleUrl}`, {
         articleUrl: result.articleUrl,
         articleId: result.articleId,
         uploadedImages: result.uploadedImages,
+        currentPostNumber,
+        totalPosts,
       });
 
       // Job payload에 결과 저장

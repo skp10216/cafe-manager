@@ -34,6 +34,9 @@ import {
   PostAdd,
   CheckCircle,
   Info,
+  Bolt,
+  CalendarMonth,
+  NavigateNext,
 } from '@mui/icons-material';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -44,11 +47,23 @@ import { scheduleApi, templateApi, Template, ApiError } from '@/lib/api-client';
 const scheduleSchema = z.object({
   name: z.string().min(1, '스케줄 이름을 입력하세요'),
   templateId: z.string().min(1, '템플릿을 선택하세요'),
-  runTime: z.string().regex(/^\d{2}:\d{2}$/, '올바른 시간 형식이 아닙니다 (HH:mm)'),
   dailyPostCount: z.coerce.number().min(1, '최소 1개 이상').max(100, '최대 100개'),
   postIntervalMinutes: z.coerce.number().min(1, '최소 1분').max(1440, '최대 1440분'),
-  runImmediately: z.boolean().optional(),
-});
+  scheduleType: z.enum(['immediate', 'scheduled']), // 저장 후 바로 실행 / 예약 설정
+  runTime: z.string().optional(), // 예약 설정일 때만 필수
+}).refine(
+  (data) => {
+    // 예약 설정일 때만 runTime 유효성 검사
+    if (data.scheduleType === 'scheduled') {
+      return data.runTime && /^\d{2}:\d{2}$/.test(data.runTime);
+    }
+    return true;
+  },
+  {
+    message: '예약 시간을 입력해주세요 (HH:mm)',
+    path: ['runTime'],
+  }
+);
 
 type ScheduleForm = z.infer<typeof scheduleSchema>;
 
@@ -69,6 +84,7 @@ export default function ScheduleDetailPage() {
     reset,
     control,
     watch,
+    setValue,
     formState: { errors, isValid },
   } = useForm<ScheduleForm>({
     resolver: zodResolver(scheduleSchema),
@@ -76,16 +92,16 @@ export default function ScheduleDetailPage() {
     defaultValues: {
       name: '',
       templateId: '',
-      runTime: '09:00',
       dailyPostCount: 10,
       postIntervalMinutes: 5,
-      runImmediately: false,
+      scheduleType: 'immediate', // 디폴트: 저장 후 바로 실행
+      runTime: '09:00',
     },
   });
 
   // 실시간 프리뷰를 위한 watch
   const watchedValues = watch();
-  const { name, templateId, runTime, dailyPostCount, postIntervalMinutes, runImmediately } = watchedValues;
+  const { name, templateId, dailyPostCount, postIntervalMinutes, scheduleType, runTime } = watchedValues;
 
   // 선택된 템플릿 정보
   const selectedTemplate = useMemo(() => {
@@ -94,13 +110,12 @@ export default function ScheduleDetailPage() {
 
   // 실행 설정이 유효한지 확인
   const isExecutionSettingsValid = useMemo(() => {
-    return (
-      runTime &&
-      /^\d{2}:\d{2}$/.test(runTime) &&
-      dailyPostCount >= 1 &&
-      postIntervalMinutes >= 1
-    );
-  }, [runTime, dailyPostCount, postIntervalMinutes]);
+    const basicValid = dailyPostCount >= 1 && postIntervalMinutes >= 1;
+    if (scheduleType === 'immediate') {
+      return basicValid;
+    }
+    return basicValid && runTime && /^\d{2}:\d{2}$/.test(runTime);
+  }, [scheduleType, runTime, dailyPostCount, postIntervalMinutes]);
 
   useEffect(() => {
     loadTemplates();
@@ -127,25 +142,64 @@ export default function ScheduleDetailPage() {
       reset({
         name: schedule.name,
         templateId: schedule.templateId,
-        runTime: schedule.runTime,
         dailyPostCount: schedule.dailyPostCount,
         postIntervalMinutes: schedule.postIntervalMinutes,
-        runImmediately: false,
+        scheduleType: schedule.scheduleType === 'IMMEDIATE' ? 'immediate' : 'scheduled',
+        runTime: schedule.runTime || '09:00',
       });
     } catch (error) {
       setError('스케줄을 불러올 수 없습니다');
     }
   };
 
-  const calculateEndTime = () => {
+  const calculateEndTime = (startTime?: string) => {
     if (!isExecutionSettingsValid) return null;
 
     try {
-      const [hours, minutes] = runTime.split(':').map(Number);
-      const totalMinutes = hours * 60 + minutes + (dailyPostCount - 1) * postIntervalMinutes;
+      // 즉시 실행은 현재 시간 기준, 예약 설정은 설정된 시간 기준
+      let baseHours: number, baseMinutes: number;
+      
+      if (scheduleType === 'immediate') {
+        const now = new Date();
+        baseHours = now.getHours();
+        baseMinutes = now.getMinutes();
+      } else {
+        const timeStr = startTime || runTime || '09:00';
+        [baseHours, baseMinutes] = timeStr.split(':').map(Number);
+      }
+
+      const totalMinutes = baseHours * 60 + baseMinutes + (dailyPostCount - 1) * postIntervalMinutes;
       const endHours = Math.floor(totalMinutes / 60) % 24;
       const endMinutes = totalMinutes % 60;
       return `${String(endHours).padStart(2, '0')}:${String(endMinutes).padStart(2, '0')}`;
+    } catch {
+      return null;
+    }
+  };
+
+  // 즉시 실행 시 시작 시간 (현재 시간)
+  const getImmediateStartTime = () => {
+    const now = new Date();
+    return `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  };
+
+  // 예상 게시 시간 목록 생성
+  const getPostTimeList = () => {
+    if (!isExecutionSettingsValid || scheduleType === 'immediate') return null;
+
+    try {
+      const times: string[] = [];
+      const [hours, minutes] = (runTime || '09:00').split(':').map(Number);
+      let currentMinutes = hours * 60 + minutes;
+
+      for (let i = 0; i < Math.min(dailyPostCount, 4); i++) {
+        const h = Math.floor(currentMinutes / 60) % 24;
+        const m = currentMinutes % 60;
+        times.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+        currentMinutes += postIntervalMinutes;
+      }
+
+      return times;
     } catch {
       return null;
     }
@@ -167,7 +221,15 @@ export default function ScheduleDetailPage() {
     setSaveLoading(true);
 
     try {
-      const { runImmediately, ...scheduleData } = data;
+      // API에 전송할 데이터 변환
+      const scheduleData = {
+        name: data.name,
+        templateId: data.templateId,
+        dailyPostCount: data.dailyPostCount,
+        postIntervalMinutes: data.postIntervalMinutes,
+        scheduleType: data.scheduleType === 'immediate' ? 'IMMEDIATE' : 'SCHEDULED',
+        runTime: data.scheduleType === 'scheduled' ? data.runTime : '00:00',
+      };
 
       let schedule;
       if (isNew) {
@@ -176,8 +238,8 @@ export default function ScheduleDetailPage() {
         schedule = await scheduleApi.update(id, scheduleData);
       }
 
-      // 즉시 실행 옵션 처리
-      if (runImmediately) {
+      // 저장 후 바로 실행 옵션 처리
+      if (data.scheduleType === 'immediate') {
         try {
           await scheduleApi.runNow(schedule.id);
           alert('저장 완료 및 즉시 실행이 시작되었습니다!');
@@ -204,6 +266,7 @@ export default function ScheduleDetailPage() {
 
   const endTime = calculateEndTime();
   const totalDuration = calculateTotalDuration();
+  const postTimeList = getPostTimeList();
 
   return (
     <Box sx={{ maxWidth: 900, mx: 'auto' }}>
@@ -405,41 +468,15 @@ export default function ScheduleDetailPage() {
             </Typography>
           </Box>
 
-          {/* 3열 입력 필드 */}
+          {/* 게시글 수 + 게시 간격 (2열) */}
           <Box
             sx={{
               display: 'grid',
-              gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' },
+              gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)' },
               gap: 2.5,
               mb: 3,
             }}
           >
-            {/* 시작 시간 */}
-            <Box>
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                <PlayArrow sx={{ fontSize: 16, color: 'success.main' }} />
-                <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.secondary' }}>
-                  시작 시간
-                </Typography>
-              </Box>
-              <TextField
-                {...register('runTime')}
-                type="time"
-                fullWidth
-                error={!!errors.runTime}
-                helperText={errors.runTime?.message}
-                InputLabelProps={{ shrink: true }}
-                InputProps={{
-                  sx: {
-                    borderRadius: 2,
-                    fontSize: '1.125rem',
-                    fontWeight: 600,
-                    '& input': { textAlign: 'center' },
-                  },
-                }}
-              />
-            </Box>
-
             {/* 게시글 수 */}
             <Box>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
@@ -501,114 +538,376 @@ export default function ScheduleDetailPage() {
             </Box>
           </Box>
 
+          <Divider sx={{ my: 3 }} />
+
+          {/* 실행 타입 선택 (체크박스 형태) */}
+          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {/* 저장 후 바로 실행 */}
+            <Controller
+              name="scheduleType"
+              control={control}
+              render={({ field }) => (
+                <Box
+                  onClick={() => field.onChange('immediate')}
+                  sx={{
+                    p: 2.5,
+                    borderRadius: 2,
+                    cursor: 'pointer',
+                    border: '2px solid',
+                    borderColor: field.value === 'immediate' ? 'success.main' : 'divider',
+                    bgcolor: field.value === 'immediate' 
+                      ? (theme) => alpha(theme.palette.success.main, 0.04)
+                      : 'transparent',
+                    transition: 'all 0.2s ease',
+                    '&:hover': {
+                      borderColor: field.value === 'immediate' ? 'success.main' : 'success.light',
+                      bgcolor: (theme) => alpha(theme.palette.success.main, 0.04),
+                    },
+                  }}
+                >
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={field.value === 'immediate'}
+                        onChange={() => field.onChange('immediate')}
+                        sx={{
+                          color: 'success.main',
+                          '&.Mui-checked': { color: 'success.main' },
+                        }}
+                      />
+                    }
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                        <Bolt sx={{ fontSize: 20, color: field.value === 'immediate' ? 'success.main' : 'text.disabled' }} />
+                        <Box>
+                          <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                            저장 후 바로 실행
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            저장 즉시 게시가 시작됩니다
+                          </Typography>
+                        </Box>
+                      </Box>
+                    }
+                    sx={{ m: 0, width: '100%' }}
+                  />
+                </Box>
+              )}
+            />
+
+            {/* 예약 설정 */}
+            <Controller
+              name="scheduleType"
+              control={control}
+              render={({ field }) => (
+                <Box
+                  onClick={() => field.onChange('scheduled')}
+                  sx={{
+                    p: 2.5,
+                    borderRadius: 2,
+                    cursor: 'pointer',
+                    border: '2px solid',
+                    borderColor: field.value === 'scheduled' ? 'primary.main' : 'divider',
+                    bgcolor: field.value === 'scheduled' 
+                      ? (theme) => alpha(theme.palette.primary.main, 0.04)
+                      : 'transparent',
+                    transition: 'all 0.2s ease',
+                    '&:hover': {
+                      borderColor: field.value === 'scheduled' ? 'primary.main' : 'primary.light',
+                      bgcolor: (theme) => alpha(theme.palette.primary.main, 0.04),
+                    },
+                  }}
+                >
+                  <FormControlLabel
+                    control={
+                      <Checkbox
+                        checked={field.value === 'scheduled'}
+                        onChange={() => field.onChange('scheduled')}
+                        sx={{
+                          color: 'primary.main',
+                          '&.Mui-checked': { color: 'primary.main' },
+                        }}
+                      />
+                    }
+                    label={
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                        <CalendarMonth sx={{ fontSize: 20, color: field.value === 'scheduled' ? 'primary.main' : 'text.disabled' }} />
+                        <Box>
+                          <Typography variant="body1" sx={{ fontWeight: 600 }}>
+                            예약 설정
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            매일 지정된 시간에 자동으로 게시됩니다
+                          </Typography>
+                        </Box>
+                      </Box>
+                    }
+                    sx={{ m: 0, width: '100%' }}
+                  />
+
+                  {/* 예약 설정 선택 시 시간 입력 UI 표시 */}
+                  {field.value === 'scheduled' && (
+                    <Box
+                      onClick={(e) => e.stopPropagation()}
+                      sx={{
+                        mt: 2.5,
+                        pt: 2.5,
+                        borderTop: '1px dashed',
+                        borderColor: 'divider',
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
+                        <PlayArrow sx={{ fontSize: 18, color: 'primary.main' }} />
+                        <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.primary' }}>
+                          시작 시간 설정
+                        </Typography>
+                      </Box>
+                      <TextField
+                        {...register('runTime')}
+                        type="time"
+                        error={!!errors.runTime}
+                        helperText={errors.runTime?.message || '매일 이 시간에 자동으로 게시가 시작됩니다'}
+                        InputLabelProps={{ shrink: true }}
+                        InputProps={{
+                          sx: {
+                            borderRadius: 2,
+                            fontSize: '1.5rem',
+                            fontWeight: 700,
+                            minWidth: 180,
+                            maxWidth: 200,
+                            bgcolor: (theme) => alpha(theme.palette.primary.main, 0.04),
+                            '& input': { 
+                              textAlign: 'center',
+                              py: 1.5,
+                            },
+                          },
+                        }}
+                      />
+                    </Box>
+                  )}
+                </Box>
+              )}
+            />
+          </Box>
+
           {/* 실행 미리보기 - 설정이 유효할 때만 표시 */}
           {isExecutionSettingsValid && (
             <Box
               sx={{
-                p: 2.5,
-                borderRadius: 2,
+                mt: 3,
+                p: 3,
+                borderRadius: 3,
                 background: (theme) =>
-                  `linear-gradient(135deg, ${alpha(theme.palette.success.main, 0.06)} 0%, ${alpha(theme.palette.primary.main, 0.04)} 100%)`,
-                border: '1px solid',
-                borderColor: (theme) => alpha(theme.palette.success.main, 0.2),
+                  scheduleType === 'immediate'
+                    ? `linear-gradient(135deg, ${alpha(theme.palette.success.main, 0.12)} 0%, ${alpha(theme.palette.success.main, 0.04)} 100%)`
+                    : `linear-gradient(135deg, ${alpha(theme.palette.primary.main, 0.12)} 0%, ${alpha(theme.palette.primary.main, 0.04)} 100%)`,
+                border: '2px solid',
+                borderColor: (theme) =>
+                  scheduleType === 'immediate'
+                    ? alpha(theme.palette.success.main, 0.3)
+                    : alpha(theme.palette.primary.main, 0.3),
               }}
             >
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1.5 }}>
-                <CheckCircle sx={{ fontSize: 18, color: 'success.main' }} />
-                <Typography variant="subtitle2" sx={{ fontWeight: 700, color: 'success.dark' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+                <CheckCircle
+                  sx={{
+                    fontSize: 22,
+                    color: scheduleType === 'immediate' ? 'success.main' : 'primary.main',
+                  }}
+                />
+                <Typography
+                  variant="subtitle1"
+                  sx={{
+                    fontWeight: 700,
+                    color: scheduleType === 'immediate' ? 'success.dark' : 'primary.dark',
+                  }}
+                >
                   실행 미리보기
                 </Typography>
               </Box>
 
-              <Typography variant="body1" sx={{ fontWeight: 600, mb: 1, color: 'text.primary' }}>
-                매일 {runTime}부터 {postIntervalMinutes}분 간격으로 {dailyPostCount}개 게시
-              </Typography>
-
-              <Box sx={{ display: 'flex', gap: 3, flexWrap: 'wrap' }}>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                  <Typography variant="caption" color="text.secondary">
-                    예상 완료:
-                  </Typography>
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {endTime}
-                  </Typography>
-                </Box>
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
-                  <Typography variant="caption" color="text.secondary">
-                    총 소요:
-                  </Typography>
-                  <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                    {totalDuration}
-                  </Typography>
-                </Box>
-              </Box>
-            </Box>
-          )}
-
-          {/* 저장 후 즉시 실행 옵션 */}
-          {isNew && (
-            <>
-              <Divider sx={{ my: 3 }} />
-              
-              <Box
-                sx={{
-                  p: 2,
-                  borderRadius: 2,
-                  bgcolor: (theme) => alpha(theme.palette.warning.main, 0.04),
-                  border: '1px solid',
-                  borderColor: (theme) => alpha(theme.palette.warning.main, 0.15),
-                }}
-              >
-                <Controller
-                  name="runImmediately"
-                  control={control}
-                  render={({ field }) => (
-                    <FormControlLabel
-                      control={
-                        <Checkbox
-                          checked={field.value}
-                          onChange={(e) => field.onChange(e.target.checked)}
-                          sx={{
-                            color: 'warning.main',
-                            '&.Mui-checked': { color: 'warning.main' },
-                          }}
-                        />
-                      }
-                      label={
-                        <Box>
-                          <Typography variant="body2" sx={{ fontWeight: 600 }}>
-                            저장 후 바로 오늘 1회 실행
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">
-                            저장 직후 오늘의 스케줄을 즉시 실행합니다 (같은 날 중복 실행은 자동 방지)
-                          </Typography>
-                        </Box>
-                      }
-                      sx={{ alignItems: 'flex-start', m: 0 }}
-                    />
-                  )}
-                />
-
-                {runImmediately && (
-                  <Box
+              {/* 즉시 실행 미리보기 */}
+              {scheduleType === 'immediate' && (
+                <Box>
+                  <Typography
+                    variant="h5"
                     sx={{
-                      mt: 2,
-                      p: 1.5,
-                      borderRadius: 1.5,
-                      bgcolor: (theme) => alpha(theme.palette.warning.main, 0.08),
+                      fontWeight: 800,
+                      color: 'success.dark',
+                      mb: 1.5,
                       display: 'flex',
                       alignItems: 'center',
                       gap: 1,
                     }}
                   >
-                    <Info sx={{ fontSize: 18, color: 'warning.main' }} />
-                    <Typography variant="caption" color="warning.dark">
-                      저장 시 오늘 설정된 시간과 관계없이 즉시 {dailyPostCount || 0}개 게시글이 등록됩니다
+                    <Bolt sx={{ fontSize: 28 }} />
+                    저장 즉시 실행
+                  </Typography>
+                  <Box
+                    sx={{
+                      p: 2.5,
+                      borderRadius: 2,
+                      bgcolor: 'background.paper',
+                      border: '1px solid',
+                      borderColor: (theme) => alpha(theme.palette.success.main, 0.2),
+                    }}
+                  >
+                    <Typography variant="body1" sx={{ fontWeight: 600, mb: 1.5 }}>
+                      <Box component="span" sx={{ color: 'success.main', fontWeight: 700, fontSize: '1.25rem' }}>
+                        {dailyPostCount}개
+                      </Box>
+                      의 게시글을{' '}
+                      <Box component="span" sx={{ color: 'warning.main', fontWeight: 700, fontSize: '1.25rem' }}>
+                        {postIntervalMinutes}분
+                      </Box>{' '}
+                      간격으로 게시
                     </Typography>
+
+                    {/* 시간 정보 그리드 */}
+                    <Box
+                      sx={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(3, 1fr)',
+                        gap: 2,
+                        p: 2,
+                        borderRadius: 1.5,
+                        bgcolor: (theme) => alpha(theme.palette.success.main, 0.06),
+                      }}
+                    >
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                          예상 시작 시간
+                        </Typography>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: 'success.main' }}>
+                          {getImmediateStartTime()}
+                        </Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                          예상 종료 시간
+                        </Typography>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: 'error.main' }}>
+                          {endTime || '-'}
+                        </Typography>
+                      </Box>
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 0.5 }}>
+                          총 소요 시간
+                        </Typography>
+                        <Typography variant="h6" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                          약 {totalDuration}
+                        </Typography>
+                      </Box>
+                    </Box>
                   </Box>
-                )}
-              </Box>
-            </>
+                </Box>
+              )}
+
+              {/* 예약 설정 미리보기 */}
+              {scheduleType === 'scheduled' && (
+                <Box>
+                  <Typography
+                    variant="h5"
+                    sx={{
+                      fontWeight: 800,
+                      color: 'primary.dark',
+                      mb: 1.5,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 1,
+                    }}
+                  >
+                    <CalendarMonth sx={{ fontSize: 28 }} />
+                    매일{' '}
+                    <Box
+                      component="span"
+                      sx={{
+                        px: 1.5,
+                        py: 0.5,
+                        borderRadius: 1.5,
+                        bgcolor: 'primary.main',
+                        color: 'white',
+                        fontSize: '1.5rem',
+                      }}
+                    >
+                      {runTime}
+                    </Box>{' '}
+                    시작
+                  </Typography>
+
+                  {/* 타임라인 시각화 */}
+                  {postTimeList && postTimeList.length > 0 && (
+                    <Box
+                      sx={{
+                        p: 2,
+                        borderRadius: 2,
+                        bgcolor: 'background.paper',
+                        border: '1px solid',
+                        borderColor: (theme) => alpha(theme.palette.primary.main, 0.2),
+                      }}
+                    >
+                      <Box sx={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 1 }}>
+                        {postTimeList.map((time, idx) => (
+                          <Box key={idx} sx={{ display: 'flex', alignItems: 'center' }}>
+                            <Box
+                              sx={{
+                                px: 1.5,
+                                py: 0.75,
+                                borderRadius: 1.5,
+                                bgcolor: idx === 0 ? 'primary.main' : (theme) => alpha(theme.palette.primary.main, 0.1),
+                                color: idx === 0 ? 'white' : 'primary.dark',
+                                fontWeight: 700,
+                                fontSize: '0.95rem',
+                              }}
+                            >
+                              {time}
+                            </Box>
+                            {idx < postTimeList.length - 1 && (
+                              <NavigateNext sx={{ color: 'text.disabled', mx: 0.5 }} />
+                            )}
+                          </Box>
+                        ))}
+                        {dailyPostCount > 4 && (
+                          <>
+                            <NavigateNext sx={{ color: 'text.disabled' }} />
+                            <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>
+                              ... 외 {dailyPostCount - 4}개
+                            </Typography>
+                          </>
+                        )}
+                      </Box>
+
+                      <Box sx={{ mt: 2, display: 'flex', gap: 3, flexWrap: 'wrap' }}>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            예상 완료 시간
+                          </Typography>
+                          <Typography variant="body1" sx={{ fontWeight: 700, color: 'primary.main' }}>
+                            {endTime}
+                          </Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            총 소요 시간
+                          </Typography>
+                          <Typography variant="body1" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                            약 {totalDuration}
+                          </Typography>
+                        </Box>
+                        <Box>
+                          <Typography variant="caption" color="text.secondary">
+                            게시글 수
+                          </Typography>
+                          <Typography variant="body1" sx={{ fontWeight: 700, color: 'success.main' }}>
+                            {dailyPostCount}개
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Box>
+                  )}
+                </Box>
+              )}
+            </Box>
           )}
         </Box>
 
