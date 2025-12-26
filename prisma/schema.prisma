@@ -1,5 +1,6 @@
 // ==============================================
 // 카페매니저 Prisma 스키마
+// 운영형 SaaS 수준 고도화
 // ==============================================
 
 generator client {
@@ -21,6 +22,7 @@ model User {
   email        String    @unique
   passwordHash String    @map("password_hash")
   name         String?
+  role         UserRole  @default(USER)
   
   // 라이선스 관련 (3단계에서 활성화)
   planType     PlanType?  @map("plan_type")
@@ -30,16 +32,22 @@ model User {
   updatedAt    DateTime   @updatedAt @map("updated_at")
 
   // Relations
-  naverAccounts NaverAccount[]   // User 1:N NaverAccount
-  naverOauthAccounts NaverOAuthAccount[] // User 1:N NaverOAuthAccount (OAuth 기반 연결)
-  naverOauthStates   NaverOAuthState[]   // OAuth state (CSRF 방지/콜백 검증)
-  templates     Template[]
-  schedules     Schedule[]
-  scheduleRuns  ScheduleRun[]
-  managedPosts  ManagedPost[]
-  jobs          Job[]
+  naverAccounts      NaverAccount[]
+  naverOauthAccounts NaverOAuthAccount[]
+  naverOauthStates   NaverOAuthState[]
+  templates          Template[]
+  schedules          Schedule[]
+  scheduleRuns       ScheduleRun[]
+  managedPosts       ManagedPost[]
+  jobs               Job[]
 
   @@map("users")
+}
+
+/// 사용자 역할
+enum UserRole {
+  USER
+  ADMIN
 }
 
 /// 사용자 플랜 타입 (3단계에서 활성화)
@@ -93,9 +101,12 @@ model NaverSession {
   id              String              @id @default(cuid())
   naverAccountId  String              @map("naver_account_id")  // NaverAccount 참조
   profileDir      String              @map("profile_dir")       // Playwright 프로필 디렉토리
-  status          NaverSessionStatus  @default(PENDING)
+  status          SessionStatus       @default(PENDING)
   lastVerifiedAt  DateTime?           @map("last_verified_at")
+  lastCheckedAt   DateTime?           @map("last_checked_at")   // 마지막 상태 체크 시각
+  expiresAt       DateTime?           @map("expires_at")        // 예상 만료 시각
   errorMessage    String?             @map("error_message")
+  errorCode       ErrorCode?          @map("error_code")        // 표준화된 에러 코드
   naverNickname   String?             @map("naver_nickname")    // 검증된 네이버 닉네임
   
   createdAt       DateTime            @default(now()) @map("created_at")
@@ -105,38 +116,43 @@ model NaverSession {
   naverAccount    NaverAccount        @relation(fields: [naverAccountId], references: [id], onDelete: Cascade)
 
   @@index([naverAccountId])
+  @@index([status])
   @@map("naver_sessions")
+}
+
+/// 세션 상태 (5단계 운영형)
+enum SessionStatus {
+  PENDING             // 세션 초기화 대기 중
+  HEALTHY             // 정상 동작 (구 ACTIVE)
+  EXPIRING            // 곧 만료 예정 (7일 내)
+  EXPIRED             // 만료됨
+  CHALLENGE_REQUIRED  // 추가 인증 필요 (CAPTCHA/2FA)
+  ERROR               // 오류 발생
 }
 
 // ==============================================
 // 네이버 OAuth 계정 (NaverOAuthAccount)
-// - 공식 네이버 로그인(OAuth2)로 연결한 계정 정보
-// - "ID/PW 저장" 없이도 네이버 프로필/오픈 API 호출에 사용 가능
 // ==============================================
 
 model NaverOAuthAccount {
   id                   String   @id @default(cuid())
   userId               String   @map("user_id")
 
-  // 네이버 사용자 식별자 (프로필 API 응답의 response.id)
   naverUserId           String   @map("naver_user_id")
 
-  // 프로필(가능한 범위)
   email                String?
   nickname             String?
   name                 String?
   profileImageUrl      String?  @map("profile_image_url")
 
-  // 토큰 (암호화 저장 권장)
   accessTokenEncrypted String   @map("access_token_encrypted")
   refreshTokenEncrypted String? @map("refresh_token_encrypted")
-  tokenType            String?  @map("token_type")          // bearer 등
+  tokenType            String?  @map("token_type")
   tokenExpiresAt       DateTime? @map("token_expires_at")
 
   connectedAt          DateTime @default(now()) @map("connected_at")
   updatedAt            DateTime @updatedAt @map("updated_at")
 
-  // Relations
   user                 User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, naverUserId])
@@ -146,7 +162,6 @@ model NaverOAuthAccount {
 
 // ==============================================
 // 네이버 OAuth state (NaverOAuthState)
-// - CSRF 방지 및 콜백 연동 검증용 (단발성)
 // ==============================================
 
 model NaverOAuthState {
@@ -157,20 +172,11 @@ model NaverOAuthState {
   usedAt    DateTime? @map("used_at")
   createdAt DateTime @default(now()) @map("created_at")
 
-  // Relations
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([expiresAt])
   @@map("naver_oauth_states")
-}
-
-/// 네이버 세션 상태
-enum NaverSessionStatus {
-  PENDING  // 세션 초기화 대기 중
-  ACTIVE   // 활성 세션
-  EXPIRED  // 만료됨
-  ERROR    // 오류 발생
 }
 
 // ==============================================
@@ -194,13 +200,12 @@ model Template {
   contentTemplate String    @map("content_template") @db.Text
   
   // 템플릿 변수 정의 (JSON 배열)
-  // 예: [{"key": "상품명", "label": "상품명", "defaultValue": "", "required": true}]
   variables       Json?     @default("[]")
   
   // 상품 게시판 전용 필드 (선택적)
-  price           Int?                              // 가격
-  tradeMethod     TradeMethod?  @map("trade_method") // 거래 방법
-  tradeLocation   String?       @map("trade_location") // 거래 지역
+  price           Int?
+  tradeMethod     TradeMethod?  @map("trade_method")
+  tradeLocation   String?       @map("trade_location")
   
   isActive        Boolean   @default(true) @map("is_active")
   
@@ -233,25 +238,21 @@ model TemplateImage {
   id            String    @id @default(cuid())
   templateId    String    @map("template_id")
   
-  // 파일 정보
-  filename      String                    // 저장된 파일명 (UUID 기반)
-  originalName  String    @map("original_name")  // 원본 파일명
-  mimeType      String    @map("mime_type")      // MIME 타입 (image/jpeg 등)
-  size          Int                       // 파일 크기 (bytes)
-  path          String                    // 저장 경로
-  url           String                    // 접근 URL
+  filename      String
+  originalName  String    @map("original_name")
+  mimeType      String    @map("mime_type")
+  size          Int
+  path          String
+  url           String
   
-  // 이미지 메타 정보
-  width         Int?                      // 이미지 너비
-  height        Int?                      // 이미지 높이
+  width         Int?
+  height        Int?
   
-  // 순서 관리
-  order         Int       @default(0)     // 표시 순서 (0부터 시작)
+  order         Int       @default(0)
   
   createdAt     DateTime  @default(now()) @map("created_at")
   updatedAt     DateTime  @updatedAt @map("updated_at")
 
-  // Relations
   template      Template  @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
   @@index([templateId])
@@ -260,7 +261,7 @@ model TemplateImage {
 }
 
 // ==============================================
-// 스케줄 (Schedule)
+// 스케줄 (Schedule) - 운영형 SaaS 고도화
 // ==============================================
 
 /// 자동 포스팅 스케줄
@@ -272,13 +273,26 @@ model Schedule {
 
   // 실행 설정 (Daily Run 개념)
   runTime             String          // "09:00" 형식 (HH:mm)
-  dailyPostCount      Int             @default(10) @map("daily_post_count")   // 하루 게시글 수
-  postIntervalMinutes Int             @default(5) @map("post_interval_minutes") // 게시글 간격 (분)
+  dailyPostCount      Int             @default(10) @map("daily_post_count")
+  postIntervalMinutes Int             @default(5) @map("post_interval_minutes")
+  timezone            String          @default("Asia/Seoul")
 
+  // 사용자 활성화 토글 (사용자가 직접 ON/OFF)
+  userEnabled         Boolean         @default(true) @map("user_enabled")
+
+  // 관리자 게이트 (관리자 승인 상태)
+  adminStatus         AdminStatus     @default(APPROVED) @map("admin_status")
+  adminReason         String?         @map("admin_reason")       // 중지/차단 사유
+  reviewedAt          DateTime?       @map("reviewed_at")        // 마지막 심사 시각
+  reviewedBy          String?         @map("reviewed_by")        // 심사한 관리자 ID
+  suspendedAt         DateTime?       @map("suspended_at")       // 중지 시각
+
+  // 구 status 필드 (레거시 호환, userEnabled + adminStatus로 계산)
   status              ScheduleStatus  @default(PAUSED)
 
   // 실행 정보
-  lastRunDate         DateTime?       @map("last_run_date")  // 마지막 실행 날짜
+  lastRunDate         DateTime?       @map("last_run_date")
+  consecutiveFailures Int             @default(0) @map("consecutive_failures") // 연속 실패 횟수
 
   createdAt           DateTime        @default(now()) @map("created_at")
   updatedAt           DateTime        @updatedAt @map("updated_at")
@@ -290,11 +304,20 @@ model Schedule {
 
   @@index([userId])
   @@index([templateId])
+  @@index([userEnabled, adminStatus])
   @@index([status, runTime])
   @@map("schedules")
 }
 
-/// 스케줄 상태
+/// 관리자 게이트 상태
+enum AdminStatus {
+  NEEDS_REVIEW  // 승인 대기
+  APPROVED      // 승인됨
+  SUSPENDED     // 일시 정지 (사유와 함께)
+  BANNED        // 영구 차단
+}
+
+/// 스케줄 상태 (레거시 호환용)
 enum ScheduleStatus {
   ACTIVE  // 활성화됨
   PAUSED  // 일시정지됨
@@ -307,40 +330,62 @@ enum ScheduleStatus {
 
 /// 스케줄의 하루 단위 실행 기록
 model ScheduleRun {
-  id            String    @id @default(cuid())
-  scheduleId    String    @map("schedule_id")
-  userId        String    @map("user_id")
-  runDate       DateTime  @map("run_date")  // 실행 날짜 (YYYY-MM-DD)
-  status        RunStatus @default(PENDING)
+  id            String      @id @default(cuid())
+  scheduleId    String      @map("schedule_id")
+  userId        String      @map("user_id")
+  runDate       DateTime    @map("run_date")
+  status        RunStatus   @default(PENDING)
 
   // 실행 통계
-  totalJobs     Int       @default(0) @map("total_jobs")
-  completedJobs Int       @default(0) @map("completed_jobs")
-  failedJobs    Int       @default(0) @map("failed_jobs")
+  totalJobs     Int         @default(0) @map("total_jobs")
+  completedJobs Int         @default(0) @map("completed_jobs")
+  failedJobs    Int         @default(0) @map("failed_jobs")
+  skippedJobs   Int         @default(0) @map("skipped_jobs")   // 스킵된 Job 수
+
+  // 차단/스킵 사유 (BLOCKED/SKIPPED 시)
+  blockReason   String?     @map("block_reason")
+  blockCode     BlockCode?  @map("block_code")
 
   // 실행 시간
-  triggeredAt   DateTime  @default(now()) @map("triggered_at")  // 트리거 시각
-  startedAt     DateTime? @map("started_at")   // 첫 Job 시작
-  finishedAt    DateTime? @map("finished_at")  // 마지막 Job 완료
+  triggeredAt   DateTime    @default(now()) @map("triggered_at")
+  startedAt     DateTime?   @map("started_at")
+  finishedAt    DateTime?   @map("finished_at")
 
   // Relations
-  schedule      Schedule  @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
-  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  schedule      Schedule    @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+  user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   jobs          Job[]
 
-  @@unique([scheduleId, runDate])  // 하루 1회 제약
+  @@unique([scheduleId, runDate])
   @@index([userId])
   @@index([runDate])
+  @@index([status])
   @@map("schedule_runs")
 }
 
-/// 스케줄 실행 상태
+/// 스케줄 실행 상태 (확장)
 enum RunStatus {
   PENDING    // 생성됨, Job 대기 중
+  QUEUED     // 큐에 등록됨
   RUNNING    // Job 실행 중
-  COMPLETED  // 모든 Job 완료
+  COMPLETED  // 모든 Job 완료 (SUCCESS)
   FAILED     // 일부 또는 전체 Job 실패
+  SKIPPED    // 스킵됨 (조건 미충족)
+  BLOCKED    // 차단됨 (관리자/세션 문제)
   CANCELLED  // 취소됨
+}
+
+/// 차단/스킵 사유 코드
+enum BlockCode {
+  USER_DISABLED       // 사용자가 비활성화
+  ADMIN_NOT_APPROVED  // 관리자 미승인
+  ADMIN_SUSPENDED     // 관리자가 중지
+  ADMIN_BANNED        // 관리자가 차단
+  SESSION_EXPIRED     // 세션 만료
+  SESSION_CHALLENGE   // 추가 인증 필요
+  SESSION_ERROR       // 세션 오류
+  DAILY_LIMIT         // 일일 제한 초과
+  DUPLICATE           // 중복 실행 방지
 }
 
 // ==============================================
@@ -352,25 +397,21 @@ model ManagedPost {
   id              String            @id @default(cuid())
   userId          String            @map("user_id")
   
-  // 게시글 위치
   cafeId          String            @map("cafe_id")
   boardId         String            @map("board_id")
   articleId       String            @map("article_id")
   articleUrl      String            @map("article_url")
   
-  // 게시글 정보
   title           String
   status          ManagedPostStatus @default(ACTIVE)
   createdAtRemote DateTime?         @map("created_at_remote")
   
-  // 동기화 정보
   lastSyncedAt    DateTime          @map("last_synced_at")
   deletedAt       DateTime?         @map("deleted_at")
   
   createdAt       DateTime          @default(now()) @map("created_at")
   updatedAt       DateTime          @updatedAt @map("updated_at")
 
-  // Relations
   user            User              @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([cafeId, articleId])
@@ -388,33 +429,38 @@ enum ManagedPostStatus {
 }
 
 // ==============================================
-// 작업 (Job)
+// 작업 (Job) - 에러 코드 체계 추가
 // ==============================================
 
 /// 백그라운드 작업
 model Job {
-  id             String    @id @default(cuid())
+  id             String      @id @default(cuid())
   type           JobType
-  userId         String    @map("user_id")
+  userId         String      @map("user_id")
 
-  // 작업 정보
-  payload        Json      @default("{}")
-  status         JobStatus @default(PENDING)
-  errorMessage   String?   @map("error_message") @db.Text
+  payload        Json        @default("{}")
+  status         JobStatus   @default(PENDING)
+  errorMessage   String?     @map("error_message") @db.Text
+  errorCode      ErrorCode?  @map("error_code")    // 표준화된 에러 코드
 
-  // 스케줄 관련 (추가)
-  scheduleRunId  String?   @map("schedule_run_id")
-  sequenceNumber Int?      @map("sequence_number")  // 실행 순서 (1/10, 2/10...)
+  // 스케줄 관련
+  scheduleRunId  String?     @map("schedule_run_id")
+  sequenceNumber Int?        @map("sequence_number")
 
   // 재시도 정보
-  attempts       Int       @default(0)
-  maxAttempts    Int       @default(3) @map("max_attempts")
+  attempts       Int         @default(0)
+  maxAttempts    Int         @default(3) @map("max_attempts")
+
+  // 디버그 모드 아티팩트
+  runMode        RunMode     @default(HEADLESS) @map("run_mode")
+  screenshotPath String?     @map("screenshot_path")  // 스크린샷 경로
+  htmlPath       String?     @map("html_path")        // HTML 스냅샷 경로
 
   // 타임스탬프
-  createdAt      DateTime  @default(now()) @map("created_at")
-  startedAt      DateTime? @map("started_at")
-  finishedAt     DateTime? @map("finished_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+  createdAt      DateTime    @default(now()) @map("created_at")
+  startedAt      DateTime?   @map("started_at")
+  finishedAt     DateTime?   @map("finished_at")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
 
   // Relations
   user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -425,13 +471,14 @@ model Job {
   @@index([type, status])
   @@index([createdAt])
   @@index([scheduleRunId])
+  @@index([errorCode])
   @@map("jobs")
 }
 
 /// 작업 타입
 enum JobType {
   INIT_SESSION    // 네이버 세션 초기화
-  VERIFY_SESSION  // 세션 검증 (로그인 상태 + 닉네임 확인)
+  VERIFY_SESSION  // 세션 검증
   CREATE_POST     // 게시글 작성
   SYNC_POSTS      // 내가 쓴 글 동기화
   DELETE_POST     // 게시글 삭제
@@ -440,10 +487,47 @@ enum JobType {
 /// 작업 상태
 enum JobStatus {
   PENDING     // 대기 중
-  PROCESSING  // 처리 중
-  COMPLETED   // 완료
+  QUEUED      // 큐에 등록됨
+  PROCESSING  // 처리 중 (RUNNING)
+  COMPLETED   // 완료 (SUCCESS)
   FAILED      // 실패
+  SKIPPED     // 스킵됨
+  BLOCKED     // 차단됨
   CANCELLED   // 취소됨
+}
+
+/// 실행 모드
+enum RunMode {
+  HEADLESS  // 기본: 헤드리스
+  DEBUG     // 디버그: headed + 아티팩트 저장
+}
+
+/// 표준 에러 코드 체계
+enum ErrorCode {
+  // 인증 관련
+  AUTH_EXPIRED          // 세션/인증 만료
+  AUTH_INVALID          // 인증 정보 오류
+  CHALLENGE_REQUIRED    // 추가 인증 필요 (CAPTCHA/2FA)
+  LOGIN_FAILED          // 로그인 실패
+  
+  // 권한 관련
+  PERMISSION_DENIED     // 권한 부족 (카페 미가입 등)
+  CAFE_NOT_FOUND        // 카페/게시판 없음
+  
+  // 제한 관련
+  RATE_LIMIT            // 요청 제한
+  DAILY_LIMIT           // 일일 제한 초과
+  
+  // 기술적 오류
+  UI_CHANGED            // 네이버 UI 변경
+  UPLOAD_FAILED         // 업로드 실패
+  NETWORK_ERROR         // 네트워크 오류
+  TIMEOUT               // 타임아웃
+  BROWSER_ERROR         // 브라우저 오류
+  
+  // 기타
+  VALIDATION_ERROR      // 입력값 오류
+  UNKNOWN               // 알 수 없음
 }
 
 // ==============================================
@@ -460,7 +544,6 @@ model JobLog {
   
   createdAt DateTime    @default(now()) @map("created_at")
 
-  // Relations
   job       Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@index([jobId])
@@ -477,18 +560,122 @@ enum JobLogLevel {
 }
 
 // ==============================================
-// 2단계: 게시글 유지 규칙 (PostRule) - 스키마만 정의
+// 감사 로그 (AuditLog) - Admin 운영용
 // ==============================================
 
-/// 게시글 유지 규칙 (2단계에서 활성화)
+/// 관리자 감사 로그
+model AuditLog {
+  id            String      @id @default(cuid())
+  
+  // 행위자
+  actorId       String?     @map("actor_id")      // 행위자 ID (관리자 또는 시스템)
+  actorType     ActorType   @default(SYSTEM) @map("actor_type")
+  actorEmail    String?     @map("actor_email")   // 스냅샷용
+  
+  // 대상
+  targetUserId  String?     @map("target_user_id")
+  targetEmail   String?     @map("target_email")  // 스냅샷용
+  
+  // 대상 엔티티
+  entityType    EntityType  @map("entity_type")
+  entityId      String      @map("entity_id")
+  
+  // 행위
+  action        AuditAction
+  reason        String?                           // 사유 (SUSPEND, BAN 등)
+  
+  // 변경 내역
+  previousValue Json?       @map("previous_value")
+  newValue      Json?       @map("new_value")
+  
+  // 메타데이터
+  ipAddress     String?     @map("ip_address")
+  userAgent     String?     @map("user_agent")
+  metadata      Json?
+  
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@index([actorId])
+  @@index([targetUserId])
+  @@index([entityType, entityId])
+  @@index([action])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+/// 행위자 타입
+enum ActorType {
+  ADMIN   // 관리자
+  USER    // 일반 사용자
+  SYSTEM  // 시스템 자동
+}
+
+/// 대상 엔티티 타입
+enum EntityType {
+  USER
+  SCHEDULE
+  SESSION
+  TEMPLATE
+  JOB
+  POLICY
+}
+
+/// 감사 행위 타입
+enum AuditAction {
+  // 스케줄 관련
+  SCHEDULE_APPROVE      // 스케줄 승인
+  SCHEDULE_SUSPEND      // 스케줄 일시 중지
+  SCHEDULE_BAN          // 스케줄 영구 차단
+  SCHEDULE_UNSUSPEND    // 스케줄 중지 해제
+  SCHEDULE_TOGGLE       // 스케줄 ON/OFF 토글
+  
+  // 사용자 관련
+  USER_SUSPEND          // 사용자 정지
+  USER_BAN              // 사용자 차단
+  USER_UNSUSPEND        // 사용자 정지 해제
+  
+  // 세션 관련
+  SESSION_INVALIDATE    // 세션 무효화
+  SESSION_RECONNECT     // 세션 재연결
+  
+  // 정책 관련
+  POLICY_UPDATE         // 정책 변경
+  
+  // 시스템 관련
+  AUTO_SUSPEND          // 자동 중지 (연속 실패 등)
+}
+
+// ==============================================
+// 운영 정책 (Policy) - Admin 설정용
+// ==============================================
+
+/// 운영 정책 설정
+model Policy {
+  id            String      @id @default(cuid())
+  key           String      @unique
+  value         Json
+  description   String?
+  
+  updatedBy     String?     @map("updated_by")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  createdAt     DateTime    @default(now()) @map("created_at")
+
+  @@map("policies")
+}
+
+// ==============================================
+// 2단계: 게시글 유지 규칙 (PostRule)
+// ==============================================
+
+/// 게시글 유지 규칙
 model PostRule {
   id        String       @id @default(cuid())
   userId    String       @map("user_id")
   cafeId    String       @map("cafe_id")
-  boardId   String?      @map("board_id")  // null이면 카페 전체 적용
+  boardId   String?      @map("board_id")
   
   type      PostRuleType
-  value     Int                            // MAX_COUNT일 경우 유지할 개수
+  value     Int
   enabled   Boolean      @default(true)
   
   createdAt DateTime     @default(now()) @map("created_at")
@@ -503,7 +690,3 @@ model PostRule {
 enum PostRuleType {
   MAX_COUNT  // 최대 N개 유지
 }
-
-
-
-

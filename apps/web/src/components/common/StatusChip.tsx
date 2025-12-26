@@ -9,6 +9,9 @@ import { CheckCircle, Error, Warning, Schedule, HourglassEmpty, Cancel } from '@
 
 type StatusType =
   | 'ACTIVE'
+  | 'HEALTHY'           // 세션 정상 상태 (고도화 후 추가)
+  | 'EXPIRING'          // 세션 곧 만료 예정
+  | 'CHALLENGE_REQUIRED' // 추가 인증 필요
   | 'PAUSED'
   | 'PENDING'
   | 'PROCESSING'
@@ -32,6 +35,12 @@ const statusConfig: Record<
   StatusType,
   { label: string; color: ChipProps['color']; icon: typeof CheckCircle }
 > = {
+  // 세션 상태 (고도화 후)
+  HEALTHY: { label: '정상', color: 'success', icon: CheckCircle },
+  EXPIRING: { label: '곧 만료', color: 'warning', icon: Warning },
+  CHALLENGE_REQUIRED: { label: '인증 필요', color: 'warning', icon: Warning },
+  
+  // 일반 상태
   ACTIVE: { label: '활성', color: 'success', icon: CheckCircle },
   PAUSED: { label: '일시정지', color: 'default', icon: HourglassEmpty },
   PENDING: { label: '대기 중', color: 'default', icon: Schedule },
@@ -61,5 +70,7 @@ export default function StatusChip({ status, size = 'small' }: StatusChipProps) 
     />
   );
 }
+
+
 
 

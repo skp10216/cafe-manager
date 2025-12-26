@@ -262,3 +262,5 @@ export class TemplateImageService {
     return images.map((img) => img.url);
   }
 }
+
+

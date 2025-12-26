@@ -107,7 +107,7 @@ export class DashboardService {
     const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
     switch (session.status) {
-      case 'ACTIVE':
+      case 'HEALTHY':
         // 마지막 검증이 24시간 이내면 정상
         if (session.lastVerifiedAt && session.lastVerifiedAt > twentyFourHoursAgo) {
           return { status: 'OK', statusReason: '정상 동작 중' };
@@ -118,8 +118,14 @@ export class DashboardService {
       case 'PENDING':
         return { status: 'WARNING', statusReason: '세션 연동 진행 중...' };
 
+      case 'EXPIRING':
+        return { status: 'WARNING', statusReason: '세션 만료가 임박했습니다. 재연동을 권장합니다' };
+
       case 'EXPIRED':
         return { status: 'ACTION_REQUIRED', statusReason: '세션이 만료되었습니다. 재연동이 필요합니다' };
+
+      case 'CHALLENGE_REQUIRED':
+        return { status: 'ACTION_REQUIRED', statusReason: '추가 인증이 필요합니다. 네이버 연동 페이지를 확인해주세요' };
 
       case 'ERROR':
         return {
@@ -281,23 +287,23 @@ export class DashboardService {
 
   /**
    * 오늘 예정된 스케줄 타임라인 조회
+   * Schedule에는 nextRunAt이 없고 runTime(HH:mm)을 사용
    */
   async getTodayTimeline(userId: string): Promise<TodayTimelineResponse> {
     const now = new Date();
     const todayStart = new Date(now);
     todayStart.setHours(0, 0, 0, 0);
-    const todayEnd = new Date(now);
-    todayEnd.setHours(23, 59, 59, 999);
+    const today = todayStart.toISOString().slice(0, 10); // YYYY-MM-DD
 
-    // 활성 스케줄 조회 (오늘 실행 예정)
+    // 활성 스케줄 조회 (오늘 아직 실행 안됨 또는 한 번도 실행 안됨)
     const schedules = await this.prisma.schedule.findMany({
       where: {
         userId,
         status: 'ACTIVE',
-        nextRunAt: {
-          gte: todayStart,
-          lte: todayEnd,
-        },
+        OR: [
+          { lastRunDate: null },
+          { lastRunDate: { lt: todayStart } },
+        ],
       },
       include: {
         template: {
@@ -309,7 +315,7 @@ export class DashboardService {
           },
         },
       },
-      orderBy: { nextRunAt: 'asc' },
+      orderBy: { runTime: 'asc' },
     });
 
     // 오늘 실행된 Job 조회 (CREATE_POST만)
@@ -360,6 +366,11 @@ export class DashboardService {
       }
 
       const thumbnail = schedule.template.images[0];
+      
+      // runTime을 오늘 날짜와 결합하여 nextRunAt 계산
+      const [hours, minutes] = schedule.runTime.split(':').map(Number);
+      const nextRunDate = new Date(todayStart);
+      nextRunDate.setHours(hours, minutes, 0, 0);
 
       return {
         scheduleId: schedule.id,
@@ -370,7 +381,7 @@ export class DashboardService {
         cafeName: schedule.template.cafeName || schedule.template.cafeId,
         boardId: schedule.template.boardId,
         boardName: schedule.template.boardName || schedule.template.boardId,
-        nextRunAt: schedule.nextRunAt?.toISOString() ?? new Date().toISOString(),
+        nextRunAt: nextRunDate.toISOString(),
         status,
         preview: {
           subject: schedule.template.subjectTemplate,
@@ -412,15 +423,24 @@ export class DashboardService {
 
   /**
    * 다음 실행 예정 스케줄 TOP N 조회
+   * Schedule에는 nextRunAt이 없고 runTime(HH:mm)을 사용
    */
   async getNextRun(userId: string, limit: number = 3): Promise<NextRunResponse> {
     const now = new Date();
+    const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const todayStart = new Date(now);
+    todayStart.setHours(0, 0, 0, 0);
 
+    // 오늘 실행 예정인 활성 스케줄 조회 (현재 시간 이후)
     const schedules = await this.prisma.schedule.findMany({
       where: {
         userId,
         status: 'ACTIVE',
-        nextRunAt: { gt: now },
+        runTime: { gt: currentTime }, // 현재 시간 이후
+        OR: [
+          { lastRunDate: null },
+          { lastRunDate: { lt: todayStart } },
+        ],
       },
       include: {
         template: {
@@ -431,13 +451,17 @@ export class DashboardService {
           },
         },
       },
-      orderBy: { nextRunAt: 'asc' },
+      orderBy: { runTime: 'asc' },
       take: limit,
     });
 
     const items: NextRunItem[] = schedules.map((schedule) => {
-      const nextRunAt = schedule.nextRunAt!;
-      const remainingMs = nextRunAt.getTime() - now.getTime();
+      // runTime을 오늘 날짜와 결합하여 nextRunAt 계산
+      const [hours, minutes] = schedule.runTime.split(':').map(Number);
+      const nextRunDate = new Date(todayStart);
+      nextRunDate.setHours(hours, minutes, 0, 0);
+      
+      const remainingMs = nextRunDate.getTime() - now.getTime();
       const remainingMinutes = Math.max(0, Math.floor(remainingMs / (1000 * 60)));
 
       return {
@@ -446,7 +470,7 @@ export class DashboardService {
         templateName: schedule.template.name,
         cafeName: schedule.template.cafeName || '카페',
         boardName: schedule.template.boardName || '게시판',
-        nextRunAt: nextRunAt.toISOString(),
+        nextRunAt: nextRunDate.toISOString(),
         remainingMinutes,
       };
     });
@@ -585,3 +609,5 @@ export class DashboardService {
     return { items, total };
   }
 }
+
+

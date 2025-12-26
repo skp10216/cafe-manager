@@ -1,0 +1,3 @@
+-- Enterprise SaaS Upgrade Migration
+-- 이전 마이그레이션에서 이미 스키마가 동기화되었음
+-- 추가적인 데이터 마이그레이션 없음 (ACTIVE -> HEALTHY 변환은 이전 마이그레이션에서 DROP/ADD로 처리됨)

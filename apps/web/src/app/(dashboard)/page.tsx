@@ -22,12 +22,15 @@ import {
   TodayTimeline,
   RecentResultsList,
   FailureSummary,
+  OnboardingChecklist,
 } from '@/components/dashboard';
 
 // API
 import {
   dashboardApi,
   naverSessionApi,
+  templateApi,
+  scheduleApi,
   IntegrationStatusResponse,
   JobSummaryResponse,
   TodayTimelineResponse,
@@ -35,6 +38,9 @@ import {
   RecentResultsResponse,
   FailureSummaryResponse,
 } from '@/lib/api-client';
+
+// Onboarding 상태 타입
+import { OnboardingStatus } from '@/components/dashboard/OnboardingChecklist';
 
 // 토스트
 import { useToast } from '@/components/common/ToastProvider';
@@ -47,6 +53,7 @@ interface DashboardData {
   nextRun: NextRunResponse | null;
   recentResults: RecentResultsResponse | null;
   failureSummary: FailureSummaryResponse | null;
+  onboarding: OnboardingStatus;
 }
 
 export default function DashboardPage() {
@@ -61,7 +68,16 @@ export default function DashboardPage() {
     nextRun: null,
     recentResults: null,
     failureSummary: null,
+    onboarding: {
+      naverConnected: false,
+      hasTemplate: false,
+      hasSchedule: false,
+      sessionStatus: null,
+    },
   });
+  
+  // Onboarding 체크리스트 숨김 상태
+  const [hideOnboarding, setHideOnboarding] = useState(false);
   
   // 로딩 상태
   const [loading, setLoading] = useState({
@@ -79,14 +95,15 @@ export default function DashboardPage() {
 
   const loadDashboardData = useCallback(async () => {
     // 중요: 로딩 전 이전 데이터 초기화 (다른 사용자 데이터 노출 방지)
-    setData({
+    setData((prev) => ({
+      ...prev,
       integrationStatus: null,
       jobSummary: null,
       todayTimeline: null,
       nextRun: null,
       recentResults: null,
       failureSummary: null,
-    });
+    }));
     
     setLoading({
       integrationStatus: true,
@@ -97,7 +114,7 @@ export default function DashboardPage() {
       failureSummary: true,
     });
 
-    // 모든 API를 병렬로 호출
+    // 모든 API를 병렬로 호출 (Onboarding 체크용 템플릿/스케줄 포함)
     const [
       integrationStatusRes,
       jobSummaryRes,
@@ -105,6 +122,8 @@ export default function DashboardPage() {
       nextRunRes,
       recentResultsRes,
       failureSummaryRes,
+      templatesRes,
+      schedulesRes,
     ] = await Promise.allSettled([
       dashboardApi.getIntegrationStatus(),
       dashboardApi.getJobSummary(),
@@ -112,14 +131,22 @@ export default function DashboardPage() {
       dashboardApi.getNextRun(3),
       dashboardApi.getRecentResults({ limit: 5 }), // 5개로 줄임
       dashboardApi.getFailureSummary('TODAY'),
+      templateApi.list(1, 1), // 템플릿 1개만 확인
+      scheduleApi.list(1, 1), // 스케줄 1개만 확인
     ]);
+
+    // Onboarding 상태 계산
+    const integrationData = integrationStatusRes.status === 'fulfilled' 
+      ? integrationStatusRes.value 
+      : null;
+    const hasTemplates = templatesRes.status === 'fulfilled' && templatesRes.value.meta.total > 0;
+    const hasSchedules = schedulesRes.status === 'fulfilled' && schedulesRes.value.meta.total > 0;
+    const naverConnected = integrationData?.status === 'OK' || integrationData?.status === 'WARNING';
+    const sessionStatus = integrationData?.session?.status as OnboardingStatus['sessionStatus'] ?? null;
 
     // 결과 처리
     setData({
-      integrationStatus:
-        integrationStatusRes.status === 'fulfilled'
-          ? integrationStatusRes.value
-          : null,
+      integrationStatus: integrationData,
       jobSummary:
         jobSummaryRes.status === 'fulfilled' ? jobSummaryRes.value : null,
       todayTimeline:
@@ -133,6 +160,12 @@ export default function DashboardPage() {
         failureSummaryRes.status === 'fulfilled'
           ? failureSummaryRes.value
           : null,
+      onboarding: {
+        naverConnected,
+        hasTemplate: hasTemplates,
+        hasSchedule: hasSchedules,
+        sessionStatus,
+      },
     });
 
     setLoading({
@@ -337,6 +370,16 @@ export default function DashboardPage() {
           </Box>
         </Box>
       </Box>
+
+      {/* ========================================
+          섹션 0: Onboarding 체크리스트
+          ======================================== */}
+      {!hideOnboarding && (
+        <OnboardingChecklist
+          status={data.onboarding}
+          onDismiss={() => setHideOnboarding(true)}
+        />
+      )}
 
       {/* ========================================
           섹션 A: 연동 상태 배너

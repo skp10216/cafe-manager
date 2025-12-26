@@ -10,12 +10,15 @@
     "module": "CommonJS",
     "moduleResolution": "Node",
     "target": "ES2021",
+    "lib": ["ES2021", "DOM", "DOM.Iterable"],
     "esModuleInterop": true,
     "declaration": false
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
 }
+
+
 
 
 

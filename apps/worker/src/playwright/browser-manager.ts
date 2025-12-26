@@ -1,6 +1,10 @@
 /**
  * Browser Manager
  * Playwright 브라우저 인스턴스 관리
+ * 
+ * 운영형 SaaS 고도화:
+ * - 기본: Headless 모드
+ * - 디버그: Headed 모드 + 아티팩트 저장
  */
 
 import { chromium, Browser, BrowserContext } from 'playwright';
@@ -11,20 +15,19 @@ import * as fs from 'fs';
 const logger = createLogger('BrowserManager');
 
 export class BrowserManager {
-  private browser: Browser | null = null;
-  private contexts: Map<string, BrowserContext> = new Map();
+  private headlessBrowser: Browser | null = null;
+  private headedBrowser: Browser | null = null;
+  private contexts: Map<string, { context: BrowserContext; headed: boolean }> = new Map();
 
   /**
-   * 브라우저 초기화
+   * Headless 브라우저 초기화
    */
-  async init(): Promise<Browser> {
-    if (!this.browser) {
-      const headless = process.env.PLAYWRIGHT_HEADLESS === 'true';
-      
-      logger.info(`브라우저 시작 (headless: ${headless})`);
-      
-      this.browser = await chromium.launch({
-        headless,
+  async initHeadless(): Promise<Browser> {
+    if (!this.headlessBrowser) {
+      logger.info('Headless 브라우저 시작');
+
+      this.headlessBrowser = await chromium.launch({
+        headless: true,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -32,20 +35,53 @@ export class BrowserManager {
         ],
       });
     }
-    return this.browser;
+    return this.headlessBrowser;
+  }
+
+  /**
+   * Headed 브라우저 초기화 (디버그 모드용)
+   */
+  async initHeaded(): Promise<Browser> {
+    if (!this.headedBrowser) {
+      logger.info('Headed 브라우저 시작 (디버그 모드)');
+
+      this.headedBrowser = await chromium.launch({
+        headless: false,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+        ],
+        slowMo: 100,  // 디버그 시 동작을 느리게 해서 관찰 용이
+      });
+    }
+    return this.headedBrowser;
+  }
+
+  /**
+   * 레거시 init (headless 기본값 유지)
+   */
+  async init(): Promise<Browser> {
+    const forceHeaded = process.env.PLAYWRIGHT_HEADLESS === 'false';
+    return forceHeaded ? this.initHeaded() : this.initHeadless();
   }
 
   /**
    * 프로필 기반 컨텍스트 생성/재사용
-   * 네이버 로그인 세션을 유지하기 위해 프로필 디렉토리 사용
+   * @param profileDir 프로필 디렉토리
+   * @param headed true면 디버그 모드 (headed)
    */
-  async getContext(profileDir: string): Promise<BrowserContext> {
+  async getContext(profileDir: string, headed = false): Promise<BrowserContext> {
+    const contextKey = `${profileDir}:${headed ? 'headed' : 'headless'}`;
+
     // 이미 열린 컨텍스트가 있으면 재사용
-    if (this.contexts.has(profileDir)) {
-      return this.contexts.get(profileDir)!;
+    const existing = this.contexts.get(contextKey);
+    if (existing) {
+      return existing.context;
     }
 
-    await this.init();
+    // 브라우저 선택
+    const browser = headed ? await this.initHeaded() : await this.initHeadless();
 
     // 프로필 디렉토리 절대 경로
     const profilePath = path.resolve(
@@ -58,9 +94,9 @@ export class BrowserManager {
       fs.mkdirSync(profilePath, { recursive: true });
     }
 
-    logger.info(`컨텍스트 생성: ${profileDir}`);
+    logger.info(`컨텍스트 생성: ${profileDir} (headed=${headed})`);
 
-    const context = await this.browser!.newContext({
+    const context = await browser.newContext({
       storageState: fs.existsSync(path.join(profilePath, 'state.json'))
         ? path.join(profilePath, 'state.json')
         : undefined,
@@ -69,9 +105,16 @@ export class BrowserManager {
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       locale: 'ko-KR',
       timezoneId: 'Asia/Seoul',
+      // 디버그 모드: 비디오 녹화 (선택적)
+      ...(headed && process.env.DEBUG_VIDEO === 'true' ? {
+        recordVideo: {
+          dir: path.join(process.env.ARTIFACTS_DIR || './artifacts', 'videos'),
+          size: { width: 1280, height: 720 },
+        },
+      } : {}),
     });
 
-    this.contexts.set(profileDir, context);
+    this.contexts.set(contextKey, { context, headed });
     return context;
   }
 
@@ -79,31 +122,40 @@ export class BrowserManager {
    * 컨텍스트 상태 저장
    */
   async saveContext(profileDir: string): Promise<void> {
-    const context = this.contexts.get(profileDir);
-    if (!context) return;
+    // headless와 headed 둘 다 체크
+    for (const [key, value] of this.contexts.entries()) {
+      if (key.startsWith(profileDir)) {
+        const profilePath = path.resolve(
+          process.env.NAVER_PROFILE_DIR || './playwright-profiles',
+          profileDir
+        );
 
-    const profilePath = path.resolve(
-      process.env.NAVER_PROFILE_DIR || './playwright-profiles',
-      profileDir
-    );
+        await value.context.storageState({
+          path: path.join(profilePath, 'state.json'),
+        });
 
-    await context.storageState({
-      path: path.join(profilePath, 'state.json'),
-    });
-
-    logger.info(`컨텍스트 저장: ${profileDir}`);
+        logger.info(`컨텍스트 저장: ${profileDir}`);
+        return;
+      }
+    }
   }
 
   /**
    * 컨텍스트 닫기
    */
   async closeContext(profileDir: string): Promise<void> {
-    const context = this.contexts.get(profileDir);
-    if (context) {
-      await this.saveContext(profileDir);
-      await context.close();
-      this.contexts.delete(profileDir);
+    // headless와 headed 둘 다 체크
+    const keysToDelete: string[] = [];
+
+    for (const [key, value] of this.contexts.entries()) {
+      if (key.startsWith(profileDir)) {
+        await this.saveContext(profileDir);
+        await value.context.close();
+        keysToDelete.push(key);
+      }
     }
+
+    keysToDelete.forEach((key) => this.contexts.delete(key));
   }
 
   /**
@@ -111,14 +163,25 @@ export class BrowserManager {
    */
   async closeAll(): Promise<void> {
     // 모든 컨텍스트 저장 후 닫기
-    for (const profileDir of this.contexts.keys()) {
+    const profileDirs = new Set<string>();
+    for (const key of this.contexts.keys()) {
+      const profileDir = key.split(':')[0];
+      profileDirs.add(profileDir);
+    }
+
+    for (const profileDir of profileDirs) {
       await this.closeContext(profileDir);
     }
 
-    // 브라우저 닫기
-    if (this.browser) {
-      await this.browser.close();
-      this.browser = null;
+    // 브라우저들 닫기
+    if (this.headlessBrowser) {
+      await this.headlessBrowser.close();
+      this.headlessBrowser = null;
+    }
+
+    if (this.headedBrowser) {
+      await this.headedBrowser.close();
+      this.headedBrowser = null;
     }
 
     logger.info('모든 브라우저 리소스 정리 완료');
@@ -131,7 +194,15 @@ export class BrowserManager {
     profileDir: string,
     filename: string
   ): Promise<string | null> {
-    const context = this.contexts.get(profileDir);
+    // 해당 프로필의 컨텍스트 찾기
+    let context: BrowserContext | null = null;
+    for (const [key, value] of this.contexts.entries()) {
+      if (key.startsWith(profileDir)) {
+        context = value.context;
+        break;
+      }
+    }
+
     if (!context) return null;
 
     const pages = context.pages();
@@ -152,13 +223,59 @@ export class BrowserManager {
 
     return screenshotPath;
   }
+
+  /**
+   * HTML 스냅샷 저장 (디버그용)
+   */
+  async saveHtmlSnapshot(
+    profileDir: string,
+    filename: string
+  ): Promise<string | null> {
+    let context: BrowserContext | null = null;
+    for (const [key, value] of this.contexts.entries()) {
+      if (key.startsWith(profileDir)) {
+        context = value.context;
+        break;
+      }
+    }
+
+    if (!context) return null;
+
+    const pages = context.pages();
+    if (pages.length === 0) return null;
+
+    const artifactsDir = process.env.ARTIFACTS_DIR || './artifacts';
+    if (!fs.existsSync(artifactsDir)) {
+      fs.mkdirSync(artifactsDir, { recursive: true });
+    }
+
+    const htmlPath = path.join(
+      artifactsDir,
+      `${filename}-${Date.now()}.html`
+    );
+
+    const html = await pages[0].content();
+    fs.writeFileSync(htmlPath, html, 'utf-8');
+    logger.info(`HTML 스냅샷 저장: ${htmlPath}`);
+
+    return htmlPath;
+  }
+
+  /**
+   * 에러 발생 시 아티팩트 일괄 저장
+   */
+  async saveErrorArtifacts(
+    profileDir: string,
+    jobId: string
+  ): Promise<{ screenshot: string | null; html: string | null }> {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const prefix = `error-${jobId}-${timestamp}`;
+
+    const [screenshot, html] = await Promise.all([
+      this.saveScreenshot(profileDir, prefix),
+      this.saveHtmlSnapshot(profileDir, prefix),
+    ]);
+
+    return { screenshot, html };
+  }
 }
-
-
-
-
-
-
-
-
-

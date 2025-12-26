@@ -57,6 +57,44 @@ const JOB_TYPE_LABELS: Record<string, string> = {
   DELETE_POST: '삭제',
 };
 
+/** 에러 코드 라벨 */
+const ERROR_CODE_LABELS: Record<string, string> = {
+  AUTH_EXPIRED: '인증 만료',
+  AUTH_INVALID: '인증 정보 오류',
+  CHALLENGE_REQUIRED: '추가 인증 필요',
+  LOGIN_FAILED: '로그인 실패',
+  PERMISSION_DENIED: '권한 부족',
+  CAFE_NOT_FOUND: '카페/게시판 없음',
+  RATE_LIMIT: '요청 제한',
+  DAILY_LIMIT: '일일 제한 초과',
+  UI_CHANGED: '네이버 UI 변경',
+  UPLOAD_FAILED: '업로드 실패',
+  NETWORK_ERROR: '네트워크 오류',
+  TIMEOUT: '타임아웃',
+  BROWSER_ERROR: '브라우저 오류',
+  VALIDATION_ERROR: '입력값 오류',
+  UNKNOWN: '알 수 없음',
+};
+
+/** 에러 코드별 해결 가이드 */
+const ERROR_CODE_GUIDES: Record<string, string> = {
+  AUTH_EXPIRED: '네이버 연동 상태를 확인하고 재연동해주세요.',
+  AUTH_INVALID: '네이버 계정 정보를 확인해주세요.',
+  CHALLENGE_REQUIRED: '네이버에서 추가 인증(CAPTCHA/2FA)이 필요합니다.',
+  LOGIN_FAILED: '네이버 계정 비밀번호가 변경되었을 수 있습니다. 재연동해주세요.',
+  PERMISSION_DENIED: '해당 카페/게시판에 글을 쓸 권한이 있는지 확인해주세요.',
+  CAFE_NOT_FOUND: '템플릿에 설정된 카페/게시판을 확인해주세요.',
+  RATE_LIMIT: '잠시 후 다시 시도해주세요. 네이버 요청 제한입니다.',
+  DAILY_LIMIT: '오늘 일일 게시 한도에 도달했습니다.',
+  UI_CHANGED: '네이버 UI가 변경되었습니다. 관리자에게 문의해주세요.',
+  UPLOAD_FAILED: '이미지 파일을 확인하고 다시 시도해주세요.',
+  NETWORK_ERROR: '네트워크 연결을 확인해주세요.',
+  TIMEOUT: '서버 응답이 지연되었습니다. 다시 시도해주세요.',
+  BROWSER_ERROR: '시스템 오류입니다. 관리자에게 문의해주세요.',
+  VALIDATION_ERROR: '템플릿 내용을 확인해주세요.',
+  UNKNOWN: '알 수 없는 오류입니다. 관리자에게 문의해주세요.',
+};
+
 /** Job 타입 아이콘 */
 const JOB_TYPE_ICONS: Record<string, React.ElementType> = {
   INIT_SESSION: Login,
@@ -592,11 +630,11 @@ export default function LogsPage() {
                 </Paper>
               </Box>
 
-              {/* 에러 메시지 */}
-              {selectedJob.errorMessage && (
+              {/* 에러 정보 (코드 + 메시지 + 가이드) */}
+              {(selectedJob.errorMessage || selectedJob.errorCode) && (
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-                    에러 메시지
+                    실패 원인
                   </Typography>
                   <Paper
                     variant="outlined"
@@ -606,9 +644,74 @@ export default function LogsPage() {
                       borderColor: '#FECACA',
                     }}
                   >
-                    <Typography variant="body2" color="error">
-                      {selectedJob.errorMessage}
-                    </Typography>
+                    {selectedJob.errorCode && (
+                      <Box sx={{ mb: 1 }}>
+                        <Chip
+                          label={ERROR_CODE_LABELS[selectedJob.errorCode] || selectedJob.errorCode}
+                          size="small"
+                          color="error"
+                          sx={{ mb: 1 }}
+                        />
+                      </Box>
+                    )}
+                    {selectedJob.errorMessage && (
+                      <Typography variant="body2" color="error" sx={{ mb: 1 }}>
+                        {selectedJob.errorMessage}
+                      </Typography>
+                    )}
+                    {selectedJob.errorCode && ERROR_CODE_GUIDES[selectedJob.errorCode] && (
+                      <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 1 }}>
+                        💡 {ERROR_CODE_GUIDES[selectedJob.errorCode]}
+                      </Typography>
+                    )}
+                  </Paper>
+                </Box>
+              )}
+
+              {/* 디버그 아티팩트 (스크린샷/HTML) */}
+              {(selectedJob.screenshotPath || selectedJob.htmlPath) && (
+                <Box sx={{ mb: 3 }}>
+                  <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    디버그 정보
+                  </Typography>
+                  <Paper variant="outlined" sx={{ p: 2 }}>
+                    {selectedJob.screenshotPath && (
+                      <Box sx={{ mb: selectedJob.htmlPath ? 2 : 0 }}>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                          스크린샷
+                        </Typography>
+                        <Box
+                          component="img"
+                          src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}${selectedJob.screenshotPath}`}
+                          alt="실패 시점 스크린샷"
+                          sx={{
+                            maxWidth: '100%',
+                            borderRadius: 1,
+                            border: '1px solid',
+                            borderColor: 'divider',
+                          }}
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).style.display = 'none';
+                          }}
+                        />
+                      </Box>
+                    )}
+                    {selectedJob.htmlPath && (
+                      <Box>
+                        <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+                          HTML 스냅샷
+                        </Typography>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          href={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}${selectedJob.htmlPath}`}
+                          target="_blank"
+                          startIcon={<OpenInNew />}
+                        >
+                          HTML 보기
+                        </Button>
+                      </Box>
+                    )}
                   </Paper>
                 </Box>
               )}

@@ -9,7 +9,7 @@
  * - 게시글 삭제
  */
 
-import { Page, BrowserContext, ElementHandle } from 'playwright';
+import { Page, BrowserContext } from 'playwright';
 import { createLogger } from '../utils/logger';
 import { NAVER_CAFE_URLS } from '../constants';
 import {
@@ -288,6 +288,7 @@ export class NaverCafeClient {
 
   /**
    * 네이버 프로필 정보 가져오기
+   * 여러 방법을 순차적으로 시도하여 안정적으로 닉네임을 가져옴
    */
   async getProfile(): Promise<NaverProfile | null> {
     try {
@@ -297,35 +298,26 @@ export class NaverCafeClient {
 
       logger.info('프로필 확인 시작');
       
-      // 내정보 페이지에서 닉네임 찾기
-      await page.goto('https://nid.naver.com/user2/help/myInfo', {
-        waitUntil: 'domcontentloaded',
-        timeout: 15000,
-      });
-      await page.waitForTimeout(1200);
-
-      const nicknameSelectors = [
-        'input[name="nickname"]',
-        'input#nickname',
-        '[class*="nickname"]',
-        '.nickname',
-      ];
-
-      for (const selector of nicknameSelectors) {
-        const el = await page.$(selector);
-        if (!el) continue;
-        const tagName = await el.evaluate((e) => e.tagName.toLowerCase());
-        const text = tagName === 'input' 
-          ? await el.getAttribute('value') 
-          : await el.textContent();
-        if (text && text.trim().length > 0 && text.trim().length < 30) {
-          nickname = text.trim();
-          logger.info(`프로필 확인 성공: ${nickname}`);
-          break;
-        }
+      // 방법 1: 네이버 메인 페이지에서 프로필 정보 가져오기
+      nickname = await this.getProfileFromNaverMain(page);
+      
+      // 방법 2: 네이버 프로필 API 호출 시도
+      if (!nickname) {
+        nickname = await this.getProfileFromNaverApi(page);
+      }
+      
+      // 방법 3: 네이버 MY 페이지에서 가져오기
+      if (!nickname) {
+        nickname = await this.getProfileFromMyPage(page);
+      }
+      
+      // 방법 4: 내정보 페이지에서 닉네임 찾기 (레거시)
+      if (!nickname) {
+        nickname = await this.getProfileFromMyInfo(page);
       }
 
       if (nickname) {
+        logger.info(`프로필 확인 성공: ${nickname}`);
         return { nickname, profileImageUrl };
       }
 
@@ -333,6 +325,172 @@ export class NaverCafeClient {
       return null;
     } catch (error) {
       logger.error('프로필 정보 가져오기 실패:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 네이버 메인 페이지에서 로그인된 사용자 닉네임 가져오기
+   */
+  private async getProfileFromNaverMain(page: Page): Promise<string | null> {
+    try {
+      await page.goto('https://www.naver.com', {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000,
+      });
+      await page.waitForTimeout(1000);
+
+      // 네이버 메인 상단의 로그인된 사용자 영역에서 닉네임 찾기
+      const mainSelectors = [
+        // 네이버 메인 MY 영역
+        '.MyView-module__my_name___Bfg5u',
+        '[class*="my_name"]',
+        // 로그인 버튼 옆 사용자명
+        '.login_profile .name',
+        '.MyView-module__link_login___HpHMW span',
+        // 프로필 영역
+        '[class*="profile_name"]',
+        '.gnb_my_namebox .gnb_name',
+      ];
+
+      for (const selector of mainSelectors) {
+        try {
+          const el = await page.$(selector);
+          if (el) {
+            const text = await el.textContent();
+            if (text && text.trim().length > 0 && text.trim().length < 30) {
+              logger.debug(`네이버 메인에서 닉네임 발견 (${selector}): ${text.trim()}`);
+              return text.trim();
+            }
+          }
+        } catch {
+          // 셀렉터 실패 시 다음 시도
+        }
+      }
+      return null;
+    } catch (error) {
+      logger.debug('네이버 메인에서 프로필 가져오기 실패:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 네이버 프로필 API를 통해 닉네임 가져오기
+   */
+  private async getProfileFromNaverApi(page: Page): Promise<string | null> {
+    try {
+      // 네이버 프로필 API 직접 호출
+      const response = await page.evaluate(async () => {
+        try {
+          const res = await fetch('https://nid.naver.com/user2/api/profile', {
+            credentials: 'include',
+          });
+          if (res.ok) {
+            const data = await res.json() as { result?: { nickname?: string; name?: string } };
+            return data?.result?.nickname || data?.result?.name || null;
+          }
+        } catch {
+          // API 호출 실패
+        }
+        return null;
+      });
+
+      if (response) {
+        logger.debug(`네이버 API에서 닉네임 발견: ${response}`);
+        return response;
+      }
+      return null;
+    } catch (error) {
+      logger.debug('네이버 API 프로필 가져오기 실패:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 네이버 MY 페이지에서 닉네임 가져오기
+   */
+  private async getProfileFromMyPage(page: Page): Promise<string | null> {
+    try {
+      await page.goto('https://my.naver.com', {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000,
+      });
+      await page.waitForTimeout(1000);
+
+      const myPageSelectors = [
+        '.profile_area .name',
+        '.my_profile_area .name',
+        '[class*="profile"] [class*="name"]',
+        '.user_name',
+        '.nickname',
+      ];
+
+      for (const selector of myPageSelectors) {
+        try {
+          const el = await page.$(selector);
+          if (el) {
+            const text = await el.textContent();
+            if (text && text.trim().length > 0 && text.trim().length < 30) {
+              logger.debug(`MY 페이지에서 닉네임 발견 (${selector}): ${text.trim()}`);
+              return text.trim();
+            }
+          }
+        } catch {
+          // 셀렉터 실패 시 다음 시도
+        }
+      }
+      return null;
+    } catch (error) {
+      logger.debug('MY 페이지에서 프로필 가져오기 실패:', error);
+      return null;
+    }
+  }
+
+  /**
+   * 네이버 내정보 페이지에서 닉네임 가져오기 (레거시)
+   */
+  private async getProfileFromMyInfo(page: Page): Promise<string | null> {
+    try {
+      await page.goto('https://nid.naver.com/user2/help/myInfo', {
+        waitUntil: 'domcontentloaded',
+        timeout: 15000,
+      });
+      await page.waitForTimeout(1200);
+
+      const nicknameSelectors = [
+        // 새로운 UI 셀렉터들
+        '.nickname_row input',
+        '[data-testid="nickname"]',
+        'input[name="nickname"]',
+        'input#nickname',
+        // 클래스 기반
+        '[class*="nickname"] input',
+        '[class*="nickname"]',
+        '.nickname',
+        // 테이블 형태 UI
+        'td input[type="text"]',
+        '.info_data input',
+      ];
+
+      for (const selector of nicknameSelectors) {
+        try {
+          const el = await page.$(selector);
+          if (!el) continue;
+          const tagName = await el.evaluate((e) => e.tagName.toLowerCase());
+          const text = tagName === 'input' 
+            ? await el.getAttribute('value') 
+            : await el.textContent();
+          if (text && text.trim().length > 0 && text.trim().length < 30) {
+            logger.debug(`내정보 페이지에서 닉네임 발견 (${selector}): ${text.trim()}`);
+            return text.trim();
+          }
+        } catch {
+          // 셀렉터 실패 시 다음 시도
+        }
+      }
+      return null;
+    } catch (error) {
+      logger.debug('내정보 페이지에서 프로필 가져오기 실패:', error);
       return null;
     }
   }
@@ -463,7 +621,7 @@ export class NaverCafeClient {
       // 방법 1: JavaScript로 <a> 태그 포함 모든 버튼 검색
       const jsResult = await page.evaluate(() => {
         // button과 a[role="button"] 모두 검색
-        const allClickables = Array.from(document.querySelectorAll('button, a[role="button"], a.BaseButton'));
+        const allClickables = Array.from(document.querySelectorAll<HTMLElement>('button, a[role="button"], a.BaseButton'));
         
         console.log(`[DEBUG] 클릭 가능 요소 수: ${allClickables.length}`);
         
@@ -475,7 +633,7 @@ export class NaverCafeClient {
           
           if (isSkinGreen && spanText === '등록') {
             console.log('[방법1] skinGreen 등록 버튼 발견!');
-            (el as HTMLElement).click();
+            el.click();
             return { success: true, method: 'skinGreen + span' };
           }
         }
@@ -486,7 +644,7 @@ export class NaverCafeClient {
           if (span && span.textContent?.trim() === '등록') {
             if (!el.textContent?.includes('임시')) {
               console.log('[방법2] span.BaseButton__txt 등록 버튼 발견');
-              (el as HTMLElement).click();
+              el.click();
               return { success: true, method: 'span.BaseButton__txt' };
             }
           }
@@ -498,7 +656,7 @@ export class NaverCafeClient {
           const text = el.textContent?.trim() || '';
           if (hasGreen && text.includes('등록') && !text.includes('임시')) {
             console.log('[방법3] green 클래스 등록 버튼 발견:', text);
-            (el as HTMLElement).click();
+            el.click();
             return { success: true, method: 'green-class' };
           }
         }
@@ -508,7 +666,7 @@ export class NaverCafeClient {
           const text = el.textContent?.trim();
           if (text === '등록') {
             console.log('[방법4] 정확히 "등록" 텍스트 버튼 발견');
-            (el as HTMLElement).click();
+            el.click();
             return { success: true, method: 'exact-text' };
           }
         }
@@ -522,7 +680,7 @@ export class NaverCafeClient {
         if (registerEls.length > 0) {
           const lastEl = registerEls[registerEls.length - 1];
           console.log('[방법5] 등록 버튼 (마지막) 발견:', lastEl.textContent?.trim());
-          (lastEl as HTMLElement).click();
+          lastEl.click();
           return { success: true, method: 'last-register' };
         }
         
@@ -586,7 +744,6 @@ export class NaverCafeClient {
       // 6. 게시 완료 대기 및 결과 확인
       logger.info('게시 완료 대기 중...');
       
-      const writePageUrl = page.url(); // 현재 글쓰기 페이지 URL 저장
       let articleUrl: string | undefined;
       let articleId: string | undefined;
       
@@ -919,12 +1076,12 @@ export class NaverCafeClient {
               logger.info('개별사진 옵션 JavaScript 클릭 시도...');
               layoutModalHandled = await page.evaluate(() => {
                 // "개별사진" 텍스트가 있는 요소 찾기
-                const allElements = document.querySelectorAll('*');
+                const allElements = document.querySelectorAll<HTMLElement>('*');
                 for (const el of allElements) {
                   if (el.textContent?.trim() === '개별사진') {
                     // 부모 요소나 자신을 클릭
-                    const clickTarget = el.closest('button, a, [role="button"], li, div[class*="item"], div[class*="option"]') || el;
-                    (clickTarget as HTMLElement).click();
+                    const clickTarget = (el.closest('button, a, [role="button"], li, div[class*="item"], div[class*="option"]') || el) as HTMLElement;
+                    clickTarget.click();
                     return true;
                   }
                 }
@@ -932,9 +1089,9 @@ export class NaverCafeClient {
                 // 모달 내 첫 번째 클릭 가능한 옵션 찾기
                 const modal = document.querySelector('[class*="modal"], [class*="popup"], [class*="layer"]');
                 if (modal) {
-                  const firstOption = modal.querySelector('[class*="item"], [class*="option"], [class*="layout"] > *:first-child');
+                  const firstOption = modal.querySelector<HTMLElement>('[class*="item"], [class*="option"], [class*="layout"] > *:first-child');
                   if (firstOption) {
-                    (firstOption as HTMLElement).click();
+                    firstOption.click();
                     return true;
                   }
                 }

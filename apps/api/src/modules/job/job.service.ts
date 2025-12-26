@@ -24,6 +24,10 @@ interface CreateJobInput {
     type: JobType;
     userId: string;
     payload: Record<string, unknown>;
+    scheduleRunId?: string;
+    sequenceNumber?: number;
+    delay?: number;
+    runMode?: 'HEADLESS' | 'DEBUG';
 }
 
 const DEFAULT_JOB_MAX_ATTEMPTS = 3; // core에 정의한 값과 맞춰주면 됨
@@ -308,8 +312,9 @@ export class JobService {
                 payload: input.payload as Prisma.InputJsonValue,
                 status: 'PENDING',
                 maxAttempts: DEFAULT_JOB_MAX_ATTEMPTS,
-                scheduleRunId: input.scheduleRunId,        // 추가
-                sequenceNumber: input.sequenceNumber,      // 추가
+                scheduleRunId: input.scheduleRunId,
+                sequenceNumber: input.sequenceNumber,
+                runMode: input.runMode ?? 'HEADLESS',
             },
         });
 

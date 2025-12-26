@@ -54,3 +54,5 @@ export class DeleteImageResponseDto {
   message: string;
   deletedId: string;
 }
+
+

@@ -15,7 +15,6 @@ import {
   Refresh,
   ArrowForward,
   AutoAwesome,
-  Rocket,
 } from '@mui/icons-material';
 import { useRouter } from 'next/navigation';
 
@@ -56,16 +55,6 @@ const shimmer = keyframes`
 const pulse = keyframes`
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.8; transform: scale(1.02); }
-`;
-
-const float = keyframes`
-  0%, 100% { transform: translateY(0px); }
-  50% { transform: translateY(-4px); }
-`;
-
-const glow = keyframes`
-  0%, 100% { box-shadow: 0 0 20px rgba(37, 99, 235, 0.3); }
-  50% { box-shadow: 0 0 40px rgba(37, 99, 235, 0.5); }
 `;
 
 /** 상태별 설정 */
@@ -161,63 +150,66 @@ export default function IntegrationStatusBanner({
     return null;
   }
 
-  // NOT_CONNECTED 상태 (미연동) - 프리미엄 하이라이트 디자인
+  // NOT_CONNECTED 상태 (미연동) - 컴팩트 프리미엄 디자인
   if (status === 'NOT_CONNECTED') {
     return (
       <Paper
         elevation={0}
         sx={{
           mb: 3,
-          borderRadius: 3,
+          borderRadius: 2.5,
           overflow: 'hidden',
           position: 'relative',
-          border: '2px solid',
-          borderColor: 'primary.main',
-          animation: `${glow} 3s ease-in-out infinite`,
-          // 그라데이션 배경
-          background: `linear-gradient(135deg, 
-            rgba(37, 99, 235, 0.03) 0%, 
-            rgba(99, 102, 241, 0.06) 50%, 
-            rgba(139, 92, 246, 0.03) 100%)`,
+          border: '1px solid',
+          borderColor: (theme) => theme.palette.mode === 'dark' 
+            ? 'rgba(3, 199, 90, 0.3)' 
+            : 'rgba(3, 199, 90, 0.25)',
+          // 네이버 그린 톤 그라데이션 배경
+          background: (theme) => theme.palette.mode === 'dark'
+            ? `linear-gradient(135deg, rgba(3, 199, 90, 0.08) 0%, ${theme.palette.background.paper} 100%)`
+            : `linear-gradient(135deg, rgba(3, 199, 90, 0.04) 0%, rgba(255, 255, 255, 0.98) 100%)`,
+          boxShadow: '0 2px 12px rgba(3, 199, 90, 0.08)',
         }}
       >
-        {/* 상단 강조 바 */}
+        {/* 상단 네이버 그린 강조 바 */}
         <Box
           sx={{
-            height: 4,
-            background: 'linear-gradient(90deg, #2563EB 0%, #6366F1 50%, #8B5CF6 100%)',
+            height: 3,
+            background: 'linear-gradient(90deg, #03C75A 0%, #00A344 50%, #03C75A 100%)',
             backgroundSize: '200% 100%',
             animation: `${shimmer} 3s ease-in-out infinite`,
           }}
         />
 
-        <Box sx={{ p: { xs: 2.5, sm: 3.5 } }}>
-          {/* 메인 컨텐츠 */}
+        <Box sx={{ p: { xs: 2, sm: 2.5 } }}>
+          {/* 메인 컨텐츠 - 가로 레이아웃 */}
           <Box
             sx={{
               display: 'flex',
-              alignItems: 'flex-start',
-              gap: { xs: 2, sm: 3 },
-              flexWrap: { xs: 'wrap', md: 'nowrap' },
+              alignItems: 'center',
+              gap: 2.5,
+              flexWrap: { xs: 'wrap', sm: 'nowrap' },
             }}
           >
-            {/* 아이콘 영역 */}
+            {/* 네이버 아이콘 */}
             <Box
               sx={{
                 position: 'relative',
                 flexShrink: 0,
-                animation: `${float} 3s ease-in-out infinite`,
               }}
             >
               <Avatar
                 sx={{
-                  width: 64,
-                  height: 64,
-                  background: 'linear-gradient(135deg, #2563EB 0%, #6366F1 100%)',
-                  boxShadow: '0 8px 24px rgba(37, 99, 235, 0.3)',
+                  width: 52,
+                  height: 52,
+                  background: 'linear-gradient(135deg, #03C75A 0%, #00A344 100%)',
+                  boxShadow: '0 4px 14px rgba(3, 199, 90, 0.3)',
+                  fontSize: '1.5rem',
+                  fontWeight: 800,
+                  fontFamily: 'system-ui, sans-serif',
                 }}
               >
-                <Rocket sx={{ color: 'white', fontSize: 32 }} />
+                N
               </Avatar>
               {/* 반짝이 효과 */}
               <AutoAwesome
@@ -225,7 +217,7 @@ export default function IntegrationStatusBanner({
                   position: 'absolute',
                   top: -4,
                   right: -4,
-                  fontSize: 20,
+                  fontSize: 16,
                   color: '#F59E0B',
                   animation: `${pulse} 2s ease-in-out infinite`,
                 }}
@@ -234,147 +226,90 @@ export default function IntegrationStatusBanner({
 
             {/* 텍스트 영역 */}
             <Box sx={{ flex: 1, minWidth: 0 }}>
-              {/* 뱃지 */}
-              <Box
-                component="span"
-                sx={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 0.5,
-                  px: 1.5,
-                  py: 0.5,
-                  mb: 1.5,
-                  borderRadius: 2,
-                  fontSize: '0.75rem',
-                  fontWeight: 600,
-                  color: 'primary.main',
-                  backgroundColor: 'rgba(37, 99, 235, 0.1)',
-                  border: '1px solid rgba(37, 99, 235, 0.2)',
-                }}
-              >
-                <AutoAwesome sx={{ fontSize: 14 }} />
-                시작하기
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                <Typography
+                  variant="h3"
+                  sx={{
+                    fontWeight: 700,
+                    fontSize: '1rem',
+                    color: 'text.primary',
+                  }}
+                >
+                  네이버 계정 연동
+                </Typography>
+                <Box
+                  component="span"
+                  sx={{
+                    px: 1,
+                    py: 0.25,
+                    borderRadius: 1,
+                    fontSize: '0.65rem',
+                    fontWeight: 600,
+                    color: '#03C75A',
+                    backgroundColor: 'rgba(3, 199, 90, 0.1)',
+                    border: '1px solid rgba(3, 199, 90, 0.2)',
+                  }}
+                >
+                  필수
+                </Box>
               </Box>
-
-              <Typography
-                variant="h2"
-                sx={{
-                  fontWeight: 700,
-                  fontSize: { xs: '1.25rem', sm: '1.5rem' },
-                  background: 'linear-gradient(135deg, #1E293B 0%, #2563EB 100%)',
-                  backgroundClip: 'text',
-                  WebkitBackgroundClip: 'text',
-                  WebkitTextFillColor: 'transparent',
-                  mb: 1,
-                }}
-              >
-                네이버 카페 연동을 시작하세요
-              </Typography>
 
               <Typography
                 variant="body2"
                 sx={{
                   color: 'text.secondary',
-                  mb: 2,
-                  lineHeight: 1.7,
-                  maxWidth: 480,
+                  fontSize: '0.8125rem',
+                  lineHeight: 1.5,
                 }}
               >
-                네이버 계정을 연동하면 카페 자동 게시, 스케줄 포스팅,
-                게시글 관리 등 모든 기능을 사용할 수 있습니다.
+                네이버 계정을 연동하면 카페 자동 게시, 스케줄 포스팅 등 모든 기능을 사용할 수 있습니다
               </Typography>
-
-              {/* 단계 안내 */}
-              <Box
-                sx={{
-                  display: 'flex',
-                  gap: { xs: 2, sm: 3 },
-                  flexWrap: 'wrap',
-                  mb: { xs: 2, md: 0 },
-                }}
-              >
-                {[
-                  { num: 1, text: '네이버 로그인' },
-                  { num: 2, text: '카페 선택' },
-                  { num: 3, text: '자동 게시 시작' },
-                ].map((step) => (
-                  <Box
-                    key={step.num}
-                    sx={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 1,
-                    }}
-                  >
-                    <Box
-                      sx={{
-                        width: 24,
-                        height: 24,
-                        borderRadius: '50%',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '0.75rem',
-                        fontWeight: 700,
-                        backgroundColor: 'primary.main',
-                        color: 'white',
-                      }}
-                    >
-                      {step.num}
-                    </Box>
-                    <Typography
-                      variant="caption"
-                      sx={{ fontWeight: 500, color: 'text.primary' }}
-                    >
-                      {step.text}
-                    </Typography>
-                  </Box>
-                ))}
-              </Box>
             </Box>
 
-            {/* CTA 버튼 영역 */}
+            {/* CTA 버튼 */}
             <Box
               sx={{
                 display: 'flex',
-                flexDirection: 'column',
+                alignItems: 'center',
                 gap: 1.5,
-                width: { xs: '100%', md: 'auto' },
-                alignItems: { xs: 'stretch', md: 'flex-end' },
+                flexShrink: 0,
+                width: { xs: '100%', sm: 'auto' },
               }}
             >
               <Button
                 variant="contained"
-                size="large"
                 onClick={() => router.push('/settings')}
                 endIcon={<ArrowForward />}
                 sx={{
-                  minWidth: 180,
-                  py: 1.5,
-                  px: 3,
+                  flex: { xs: 1, sm: 'none' },
+                  minWidth: { sm: 140 },
+                  py: 1.25,
+                  px: 2.5,
                   fontWeight: 600,
-                  fontSize: '0.9375rem',
+                  fontSize: '0.875rem',
                   borderRadius: 2,
-                  background: 'linear-gradient(135deg, #2563EB 0%, #4F46E5 100%)',
-                  boxShadow: '0 4px 14px rgba(37, 99, 235, 0.4)',
+                  background: 'linear-gradient(135deg, #03C75A 0%, #00A344 100%)',
+                  boxShadow: '0 4px 12px rgba(3, 199, 90, 0.35)',
                   transition: 'all 0.2s ease',
                   '&:hover': {
-                    background: 'linear-gradient(135deg, #1D4ED8 0%, #4338CA 100%)',
-                    boxShadow: '0 6px 20px rgba(37, 99, 235, 0.5)',
-                    transform: 'translateY(-2px)',
+                    background: 'linear-gradient(135deg, #02B350 0%, #009040 100%)',
+                    boxShadow: '0 6px 16px rgba(3, 199, 90, 0.45)',
+                    transform: 'translateY(-1px)',
                   },
                 }}
               >
-                지금 연동하기
+                연동하기
               </Button>
               <Typography
                 variant="caption"
                 sx={{
-                  color: 'text.secondary',
-                  textAlign: { xs: 'center', md: 'right' },
+                  color: 'text.disabled',
+                  fontSize: '0.7rem',
+                  display: { xs: 'none', sm: 'block' },
+                  whiteSpace: 'nowrap',
                 }}
               >
-                약 2분 소요 · 무료
+                약 2분 소요
               </Typography>
             </Box>
           </Box>
@@ -519,3 +454,6 @@ export default function IntegrationStatusBanner({
     </Paper>
   );
 }
+
+
+

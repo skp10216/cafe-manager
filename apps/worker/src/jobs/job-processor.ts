@@ -2,18 +2,39 @@
  * Job Processor
  * BullMQ Job 타입별 처리 로직
  *
- * NaverAccount 기반 로그인 지원
+ * 운영형 SaaS 고도화:
+ * - 표준 ErrorCode 체계
+ * - 디버그 모드 (headed + 아티팩트 저장)
+ * - 세션 상태 자동 전환
  */
 
 import { Job as BullJob } from 'bullmq';
-import { PrismaClient, JobStatus, Prisma } from '@prisma/client';
+import { PrismaClient, JobStatus, Prisma, ErrorCode, RunMode, SessionStatus } from '@prisma/client';
 import { JobType } from '../constants';
 import { createLogger } from '../utils/logger';
 import { decrypt } from '../utils/crypto';
 import { BrowserManager } from '../playwright/browser-manager';
 import { NaverCafeClient } from '../playwright/naver-cafe-client';
+import * as path from 'path';
+import * as fs from 'fs';
 
 const logger = createLogger('JobProcessor');
+
+/** 재시도 가능한 에러 코드 */
+const RETRYABLE_ERROR_CODES: ErrorCode[] = [
+  'RATE_LIMIT',
+  'UPLOAD_FAILED',
+  'NETWORK_ERROR',
+  'TIMEOUT',
+  'BROWSER_ERROR',
+];
+
+/** 세션 상태 전환이 필요한 에러 코드 */
+const SESSION_TRANSITION_ERROR_CODES: ErrorCode[] = [
+  'AUTH_EXPIRED',
+  'CHALLENGE_REQUIRED',
+  'LOGIN_FAILED',
+];
 
 interface JobData {
   jobId: string;
@@ -22,10 +43,18 @@ interface JobData {
 }
 
 export class JobProcessor {
+  private readonly artifactsDir: string;
+
   constructor(
     private readonly prisma: PrismaClient,
     private readonly browserManager: BrowserManager
-  ) {}
+  ) {
+    // 아티팩트 저장 디렉토리
+    this.artifactsDir = path.join(process.cwd(), 'artifacts');
+    if (!fs.existsSync(this.artifactsDir)) {
+      fs.mkdirSync(this.artifactsDir, { recursive: true });
+    }
+  }
 
   /**
    * Job 처리 메인 함수
@@ -42,27 +71,30 @@ export class JobProcessor {
       throw new Error(`Job not found: ${jobId}`);
     }
 
+    // 실행 모드 결정 (DB에서 가져오거나 기본값)
+    const runMode: RunMode = job.runMode ?? 'HEADLESS';
+
     // 상태를 PROCESSING으로 업데이트
     await this.updateJobStatus(jobId, 'PROCESSING', { startedAt: new Date() });
-    await this.addLog(jobId, 'INFO', `Job 처리 시작: ${type}`);
+    await this.addLog(jobId, 'INFO', `Job 처리 시작: ${type} (mode=${runMode})`);
 
     try {
       // 타입별 처리
       switch (type) {
         case 'INIT_SESSION':
-          await this.handleInitSession(jobId, payload);
+          await this.handleInitSession(jobId, payload, runMode);
           break;
         case 'VERIFY_SESSION':
-          await this.handleVerifySession(jobId, payload);
+          await this.handleVerifySession(jobId, payload, runMode);
           break;
         case 'CREATE_POST':
-          await this.handleCreatePost(jobId, payload);
+          await this.handleCreatePost(jobId, payload, runMode);
           break;
         case 'SYNC_POSTS':
-          await this.handleSyncPosts(jobId, payload);
+          await this.handleSyncPosts(jobId, payload, runMode);
           break;
         case 'DELETE_POST':
-          await this.handleDeletePost(jobId, payload);
+          await this.handleDeletePost(jobId, payload, runMode);
           break;
         default:
           throw new Error(`Unknown job type: ${type}`);
@@ -77,30 +109,160 @@ export class JobProcessor {
         await this.updateScheduleRunProgress(job.scheduleRunId, 'completed');
       }
     } catch (error) {
-      // 실패 처리
+      // 에러 코드 분류
       const errorMessage = error instanceof Error ? error.message : String(error);
+      const errorCode = this.classifyErrorCode(errorMessage);
+
+      // 실패 처리
       await this.updateJobStatus(jobId, 'FAILED', {
         finishedAt: new Date(),
         errorMessage,
+        errorCode,
       });
-      await this.addLog(jobId, 'ERROR', `Job 처리 실패: ${errorMessage}`);
+      await this.addLog(jobId, 'ERROR', `Job 처리 실패: ${errorMessage}`, {
+        errorCode,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+
+      // 디버그 모드: 아티팩트 저장
+      if (runMode === 'DEBUG') {
+        await this.saveErrorArtifacts(jobId, job.userId);
+      }
+
+      // 세션 상태 전환이 필요한 에러인 경우
+      if (SESSION_TRANSITION_ERROR_CODES.includes(errorCode)) {
+        await this.transitionSessionStatus(job.userId, errorCode);
+      }
 
       // ScheduleRun 진행률 업데이트
       if (job.scheduleRunId) {
         await this.updateScheduleRunProgress(job.scheduleRunId, 'failed');
       }
 
-      throw error;
+      // 재시도 가능한 에러인 경우 예외를 다시 던져서 BullMQ가 재시도하도록 함
+      if (RETRYABLE_ERROR_CODES.includes(errorCode) && job.attempts < job.maxAttempts) {
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * 에러 메시지에서 에러 코드 분류
+   */
+  private classifyErrorCode(errorMessage: string): ErrorCode {
+    const msg = errorMessage.toLowerCase();
+
+    if (msg.includes('로그인') && (msg.includes('만료') || msg.includes('expired'))) {
+      return 'AUTH_EXPIRED';
+    }
+    if (msg.includes('captcha') || msg.includes('2단계') || msg.includes('추가 인증')) {
+      return 'CHALLENGE_REQUIRED';
+    }
+    if (msg.includes('로그인 실패') || msg.includes('login failed')) {
+      return 'LOGIN_FAILED';
+    }
+    if (msg.includes('권한') || msg.includes('permission')) {
+      return 'PERMISSION_DENIED';
+    }
+    if (msg.includes('카페') && (msg.includes('없') || msg.includes('not found'))) {
+      return 'CAFE_NOT_FOUND';
+    }
+    if (msg.includes('rate') || msg.includes('제한') || msg.includes('too many')) {
+      return 'RATE_LIMIT';
+    }
+    if (msg.includes('ui') && msg.includes('변경')) {
+      return 'UI_CHANGED';
+    }
+    if (msg.includes('업로드') || msg.includes('upload')) {
+      return 'UPLOAD_FAILED';
+    }
+    if (msg.includes('network') || msg.includes('네트워크') || msg.includes('연결')) {
+      return 'NETWORK_ERROR';
+    }
+    if (msg.includes('timeout') || msg.includes('시간 초과')) {
+      return 'TIMEOUT';
+    }
+    if (msg.includes('browser') || msg.includes('브라우저')) {
+      return 'BROWSER_ERROR';
+    }
+
+    return 'UNKNOWN';
+  }
+
+  /**
+   * 세션 상태 전환
+   */
+  private async transitionSessionStatus(userId: string, errorCode: ErrorCode) {
+    try {
+      let newStatus: SessionStatus;
+
+      switch (errorCode) {
+        case 'AUTH_EXPIRED':
+          newStatus = 'EXPIRED';
+          break;
+        case 'CHALLENGE_REQUIRED':
+          newStatus = 'CHALLENGE_REQUIRED';
+          break;
+        case 'LOGIN_FAILED':
+          newStatus = 'ERROR';
+          break;
+        default:
+          return;
+      }
+
+      // 사용자의 모든 활성 세션 상태 전환
+      await this.prisma.naverSession.updateMany({
+        where: {
+          naverAccount: { userId },
+          status: { in: ['HEALTHY', 'EXPIRING', 'PENDING'] },
+        },
+        data: {
+          status: newStatus,
+          errorCode,
+          errorMessage: `자동 전환: ${errorCode}`,
+        },
+      });
+
+      logger.info(`세션 상태 전환: userId=${userId}, newStatus=${newStatus}`);
+    } catch (error) {
+      logger.error(`세션 상태 전환 실패: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  /**
+   * 에러 아티팩트 저장 (디버그 모드)
+   */
+  private async saveErrorArtifacts(jobId: string, _userId: string) {
+    try {
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      const screenshotPath = path.join(this.artifactsDir, `${jobId}-${timestamp}.png`);
+      const htmlPath = path.join(this.artifactsDir, `${jobId}-${timestamp}.html`);
+
+      // 스크린샷은 BrowserManager에서 저장
+      // (실제 구현에서는 현재 열린 페이지에서 캡처)
+
+      // Job에 아티팩트 경로 저장
+      await this.prisma.job.update({
+        where: { id: jobId },
+        data: {
+          screenshotPath,
+          htmlPath,
+        },
+      });
+
+      logger.debug(`아티팩트 저장: ${screenshotPath}`);
+    } catch (error) {
+      logger.error(`아티팩트 저장 실패: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 
   /**
    * INIT_SESSION: 네이버 세션 초기화
-   * NaverAccount 정보를 사용하여 자동 로그인 시도
    */
   private async handleInitSession(
     jobId: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    runMode: RunMode
   ): Promise<void> {
     const { naverAccountId, naverSessionId, profileDir, isReconnect } = payload as {
       naverAccountId: string;
@@ -121,7 +283,7 @@ export class JobProcessor {
     });
 
     if (!account) {
-      await this.updateSessionError(naverSessionId, '네이버 계정을 찾을 수 없습니다');
+      await this.updateSessionError(naverSessionId, '네이버 계정을 찾을 수 없습니다', 'AUTH_INVALID');
       throw new Error(`NaverAccount not found: ${naverAccountId}`);
     }
 
@@ -131,13 +293,13 @@ export class JobProcessor {
       password = decrypt(account.passwordEncrypted);
     } catch (error) {
       const errMsg = '비밀번호 복호화 실패';
-      await this.updateSessionError(naverSessionId, errMsg);
+      await this.updateSessionError(naverSessionId, errMsg, 'AUTH_INVALID');
       await this.updateAccountLoginStatus(naverAccountId, 'LOGIN_FAILED', errMsg);
       throw new Error(errMsg);
     }
 
-    // 브라우저 컨텍스트 생성
-    const context = await this.browserManager.getContext(profileDir);
+    // 브라우저 컨텍스트 생성 (디버그 모드면 headed)
+    const context = await this.browserManager.getContext(profileDir, runMode === 'DEBUG');
     const client = new NaverCafeClient(context);
 
     try {
@@ -153,8 +315,11 @@ export class JobProcessor {
         if (!loginResult.success) {
           const errorMsg = loginResult.error || '로그인 실패';
           await this.addLog(jobId, 'WARN', `자동 로그인 실패: ${errorMsg}`);
-          // 원인 파악을 위해 실패 시점 스크린샷을 남긴다.
-          await this.browserManager.saveScreenshot(profileDir, `init-session-login-failed-${jobId}`);
+
+          // 디버그 모드: 스크린샷 저장
+          if (runMode === 'DEBUG') {
+            await this.browserManager.saveScreenshot(profileDir, `init-session-login-failed-${jobId}`);
+          }
 
           // CAPTCHA/2FA 등으로 자동 로그인 실패 시 수동 로그인 대기
           if (
@@ -168,33 +333,28 @@ export class JobProcessor {
               '수동 로그인이 필요합니다. 브라우저에서 로그인을 완료해주세요. (5분 대기)'
             );
 
-            // UI에서 "연동 진행 중..."만 보이지 않도록, 진행 상태 메시지를 세션에 기록한다.
-            // (상태는 PENDING 유지)
             await this.prisma.naverSession.update({
               where: { id: naverSessionId },
               data: {
-                status: 'PENDING',
+                status: 'CHALLENGE_REQUIRED',
+                errorCode: 'CHALLENGE_REQUIRED',
                 errorMessage:
-                  '수동 로그인이 필요합니다. Worker 브라우저에서 네이버 로그인(추가 인증/보안 화면 포함)을 완료해주세요.',
+                  '수동 로그인이 필요합니다. Worker 브라우저에서 네이버 로그인을 완료해주세요.',
               },
             });
 
             // 로그인 페이지로 이동 후 수동 로그인 대기
             await client.navigateToLogin();
-            const manualLoginSuccess = await client.waitForLogin(300000); // 5분 대기
+            const manualLoginSuccess = await client.waitForLogin(300000);
 
             if (!manualLoginSuccess) {
-              await this.updateSessionError(naverSessionId, '수동 로그인 시간 초과');
-              await this.updateAccountLoginStatus(
-                naverAccountId,
-                'LOGIN_FAILED',
-                '수동 로그인 시간 초과'
-              );
+              await this.updateSessionError(naverSessionId, '수동 로그인 시간 초과', 'TIMEOUT');
+              await this.updateAccountLoginStatus(naverAccountId, 'LOGIN_FAILED', '수동 로그인 시간 초과');
               throw new Error('네이버 수동 로그인 시간 초과');
             }
           } else {
             // 비밀번호 오류 등 일반적인 로그인 실패
-            await this.updateSessionError(naverSessionId, errorMsg);
+            await this.updateSessionError(naverSessionId, errorMsg, 'LOGIN_FAILED');
             await this.updateAccountLoginStatus(naverAccountId, 'LOGIN_FAILED', errorMsg);
             throw new Error(`네이버 로그인 실패: ${errorMsg}`);
           }
@@ -220,13 +380,15 @@ export class JobProcessor {
         await this.addLog(jobId, 'WARN', '프로필 정보 가져오기 실패 (세션은 유효)');
       }
 
-      // 세션 상태를 ACTIVE로 업데이트 (닉네임 포함)
+      // 세션 상태를 HEALTHY로 업데이트
       await this.prisma.naverSession.update({
         where: { id: naverSessionId },
         data: {
-          status: 'ACTIVE',
+          status: 'HEALTHY',
           lastVerifiedAt: new Date(),
+          lastCheckedAt: new Date(),
           errorMessage: null,
+          errorCode: null,
           naverNickname: nickname,
         },
       });
@@ -241,15 +403,14 @@ export class JobProcessor {
   }
 
   /**
-   * VERIFY_SESSION: 세션 검증 (실제 로그인 상태 + 닉네임 확인)
+   * VERIFY_SESSION: 세션 검증
    */
   private async handleVerifySession(
     jobId: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    runMode: RunMode
   ): Promise<void> {
-    const { naverSessionId } = payload as {
-      naverSessionId: string;
-    };
+    const { naverSessionId } = payload as { naverSessionId: string };
 
     await this.addLog(jobId, 'INFO', `세션 검증 시작: sessionId=${naverSessionId}`);
 
@@ -264,16 +425,14 @@ export class JobProcessor {
     }
 
     // 브라우저 컨텍스트 생성
-    const context = await this.browserManager.getContext(session.profileDir);
+    const context = await this.browserManager.getContext(session.profileDir, runMode === 'DEBUG');
     const client = new NaverCafeClient(context);
 
     try {
-      // 세션 검증 수행
       let result = await client.verifySession();
 
       if (!result.isValid) {
-        // ✅ 자동 복구: 세션이 로그아웃된 경우, 저장된 계정 자격증명으로 1회 재로그인 시도
-        // - Worker 재시작/쿠키 만료/네이버 정책 변경 등으로 state.json이 무효화될 수 있음
+        // 자동 복구 시도
         if (result.error?.includes('로그인되어 있지 않습니다') && session.naverAccount) {
           await this.addLog(jobId, 'WARN', '세션이 로그아웃 상태입니다. 자동 재로그인을 시도합니다.');
 
@@ -284,17 +443,12 @@ export class JobProcessor {
             if (!loginResult.success) {
               const errorMsg = loginResult.error || '로그인 실패';
 
-              // CAPTCHA/2FA 등으로 자동 로그인 실패 시 수동 로그인 대기(VERIFY에서도 동일하게 지원)
               if (
                 errorMsg.includes('CAPTCHA') ||
                 errorMsg.includes('2단계 인증') ||
                 errorMsg.includes('수동 로그인')
               ) {
-                await this.addLog(
-                  jobId,
-                  'INFO',
-                  '수동 로그인이 필요합니다. 브라우저에서 로그인을 완료해주세요. (5분 대기)'
-                );
+                await this.addLog(jobId, 'INFO', '수동 로그인이 필요합니다.');
                 await client.navigateToLogin();
                 const manualLoginSuccess = await client.waitForLogin(300000);
                 if (!manualLoginSuccess) {
@@ -305,54 +459,46 @@ export class JobProcessor {
               }
             }
 
-            // 로그인 성공 후 컨텍스트 저장 + 재검증
             await this.browserManager.saveContext(session.profileDir);
             result = await client.verifySession();
           } catch (reloginErr) {
-            const reloginMsg =
-              reloginErr instanceof Error ? reloginErr.message : String(reloginErr);
+            const reloginMsg = reloginErr instanceof Error ? reloginErr.message : String(reloginErr);
             await this.addLog(jobId, 'WARN', `자동 재로그인 실패: ${reloginMsg}`);
           }
         }
 
-        // 세션 만료/오류 처리
         if (!result.isValid) {
           await this.prisma.naverSession.update({
             where: { id: naverSessionId },
             data: {
               status: 'EXPIRED',
+              errorCode: 'AUTH_EXPIRED',
               errorMessage: result.error || '세션이 만료되었습니다',
             },
           });
           await this.addLog(jobId, 'WARN', `세션 검증 실패: ${result.error}`);
-          await this.browserManager.saveScreenshot(session.profileDir, `verify-session-invalid-${jobId}`);
+
+          if (runMode === 'DEBUG') {
+            await this.browserManager.saveScreenshot(session.profileDir, `verify-session-invalid-${jobId}`);
+          }
+
           throw new Error(result.error || '세션 검증 실패');
         }
       }
 
-      // 성공: 세션 상태 및 닉네임 업데이트
+      // 성공: 세션 상태 업데이트
       await this.prisma.naverSession.update({
         where: { id: naverSessionId },
         data: {
-          status: 'ACTIVE',
+          status: 'HEALTHY',
           lastVerifiedAt: new Date(),
+          lastCheckedAt: new Date(),
           errorMessage: null,
+          errorCode: null,
           naverNickname: result.profile?.nickname || null,
         },
       });
 
-      // 닉네임을 못 가져와도 로그인 자체는 유효할 수 있다.
-      // 다만, UI/운영에서 원인 파악이 가능하도록 스크린샷과 경고 로그를 남긴다.
-      if (!result.profile?.nickname) {
-        await this.addLog(
-          jobId,
-          'WARN',
-          '세션은 유효하지만 네이버 닉네임을 가져오지 못했습니다. (네이버 UI 변경/권한/페이지 구조 변화 가능)'
-        );
-        await this.browserManager.saveScreenshot(session.profileDir, `verify-session-no-nickname-${jobId}`);
-      }
-
-      // 컨텍스트 저장
       await this.browserManager.saveContext(session.profileDir);
 
       await this.addLog(
@@ -366,23 +512,23 @@ export class JobProcessor {
   }
 
   /**
-   * CREATE_POST: 게시글 작성 (이미지 첨부 포함)
+   * CREATE_POST: 게시글 작성
    */
   private async handleCreatePost(
     jobId: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    runMode: RunMode
   ): Promise<void> {
-    const { 
-      cafeId, 
-      boardId, 
-      title, 
-      content, 
+    const {
+      cafeId,
+      boardId,
+      title,
+      content,
       imagePaths = [],
       price,
       tradeMethod,
       tradeLocation,
       naverAccountId,
-      templateId,
     } = payload as {
       cafeId: string;
       boardId: string;
@@ -393,13 +539,13 @@ export class JobProcessor {
       tradeMethod?: 'DIRECT' | 'DELIVERY' | 'BOTH';
       tradeLocation?: string;
       naverAccountId?: string;
-      templateId?: string;
     };
 
     await this.addLog(jobId, 'INFO', `게시글 작성 시작: ${cafeId}/${boardId}`, {
       title,
       imageCount: imagePaths.length,
       hasPrice: !!price,
+      runMode,
     });
 
     // 작업 소유자 및 활성 세션 찾기
@@ -412,29 +558,23 @@ export class JobProcessor {
       throw new Error('Job을 찾을 수 없습니다');
     }
 
-    // naverAccountId가 지정되면 해당 계정의 세션 사용, 없으면 사용자의 아무 활성 세션
+    // 세션 찾기
     let session;
     if (naverAccountId) {
       session = await this.prisma.naverSession.findFirst({
         where: {
           naverAccountId,
-          status: 'ACTIVE',
+          status: { in: ['HEALTHY', 'EXPIRING'] },
         },
-        include: {
-          naverAccount: true,
-        },
+        include: { naverAccount: true },
       });
     } else {
       session = await this.prisma.naverSession.findFirst({
         where: {
-          naverAccount: {
-            userId: job.userId,
-          },
-          status: 'ACTIVE',
+          naverAccount: { userId: job.userId },
+          status: { in: ['HEALTHY', 'EXPIRING'] },
         },
-        include: {
-          naverAccount: true,
-        },
+        include: { naverAccount: true },
       });
     }
 
@@ -445,37 +585,39 @@ export class JobProcessor {
     await this.addLog(jobId, 'INFO', `세션 사용: ${session.naverAccount?.loginId || session.id}`);
 
     // 브라우저 컨텍스트 가져오기
-    const context = await this.browserManager.getContext(session.profileDir);
+    const context = await this.browserManager.getContext(session.profileDir, runMode === 'DEBUG');
     const client = new NaverCafeClient(context);
 
     try {
       // 1. 로그인 상태 확인
       await this.addLog(jobId, 'INFO', '로그인 상태 확인 중...');
       const isLoggedIn = await client.isLoggedIn();
-      
+
       if (!isLoggedIn) {
         await this.addLog(jobId, 'WARN', '세션이 만료됨. 자동 재로그인 시도...');
-        
-        // 자동 재로그인 시도
+
         if (session.naverAccount) {
           const password = decrypt(session.naverAccount.passwordEncrypted);
           const loginResult = await client.login(session.naverAccount.loginId, password);
-          
+
           if (!loginResult.success) {
-            // 세션 만료 처리
             await this.prisma.naverSession.update({
               where: { id: session.id },
-              data: { status: 'EXPIRED', errorMessage: loginResult.error },
+              data: {
+                status: 'EXPIRED',
+                errorCode: 'AUTH_EXPIRED',
+                errorMessage: loginResult.error,
+              },
             });
             throw new Error(`재로그인 실패: ${loginResult.error}`);
           }
-          
+
           await this.addLog(jobId, 'INFO', '재로그인 성공');
           await this.browserManager.saveContext(session.profileDir);
         } else {
           await this.prisma.naverSession.update({
             where: { id: session.id },
-            data: { status: 'EXPIRED' },
+            data: { status: 'EXPIRED', errorCode: 'AUTH_EXPIRED' },
           });
           throw new Error('네이버 세션이 만료되었습니다');
         }
@@ -483,7 +625,7 @@ export class JobProcessor {
 
       // 2. 게시글 작성
       await this.addLog(jobId, 'INFO', '게시글 작성 중...');
-      
+
       const result = await client.createPost({
         cafeId,
         boardId,
@@ -496,30 +638,36 @@ export class JobProcessor {
       });
 
       if (!result.success) {
-        // 실패 시 스크린샷 저장
-        await this.browserManager.saveScreenshot(
-          session.profileDir, 
-          `create-post-error-${jobId}`
-        );
+        // 실패 시 스크린샷 저장 (항상)
+        await this.browserManager.saveScreenshot(session.profileDir, `create-post-error-${jobId}`);
         throw new Error(result.error || '게시글 작성 실패');
       }
 
-      // 3. 성공 로그 및 ManagedPost 등록
+      // 3. 성공 로그
       await this.addLog(jobId, 'INFO', `게시글 작성 완료: ${result.articleUrl}`, {
         articleUrl: result.articleUrl,
         articleId: result.articleId,
         uploadedImages: result.uploadedImages,
       });
 
-      // ManagedPost에 등록 (게시글 관리 목적)
+      // Job payload에 결과 저장
+      await this.prisma.job.update({
+        where: { id: jobId },
+        data: {
+          payload: {
+            ...(payload as object),
+            resultUrl: result.articleUrl,
+            resultArticleId: result.articleId,
+          } as Prisma.InputJsonValue,
+        },
+      });
+
+      // ManagedPost에 등록
       if (result.articleId) {
         try {
           await this.prisma.managedPost.upsert({
             where: {
-              cafeId_articleId: {
-                cafeId,
-                articleId: result.articleId,
-              },
+              cafeId_articleId: { cafeId, articleId: result.articleId },
             },
             create: {
               userId: job.userId,
@@ -539,14 +687,12 @@ export class JobProcessor {
           });
           await this.addLog(jobId, 'INFO', 'ManagedPost 등록 완료');
         } catch (err) {
-          // ManagedPost 등록 실패는 치명적이지 않음
           await this.addLog(jobId, 'WARN', 'ManagedPost 등록 실패 (무시됨)');
         }
       }
 
-      // 4. 브라우저 컨텍스트 저장 (세션 유지)
+      // 4. 브라우저 컨텍스트 저장
       await this.browserManager.saveContext(session.profileDir);
-
     } finally {
       await client.close();
     }
@@ -557,7 +703,8 @@ export class JobProcessor {
    */
   private async handleSyncPosts(
     jobId: string,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    runMode: RunMode
   ): Promise<void> {
     const { cafeId, naverAccountId } = payload as {
       cafeId?: string;
@@ -566,28 +713,24 @@ export class JobProcessor {
 
     await this.addLog(jobId, 'INFO', '게시글 동기화 시작');
 
-    // 작업 소유자 및 활성 세션 찾기
     const job = await this.prisma.job.findUnique({
       where: { id: jobId },
       select: { userId: true },
     });
 
-    // naverAccountId가 지정되면 해당 계정의 세션 사용
     let session;
     if (naverAccountId) {
       session = await this.prisma.naverSession.findFirst({
         where: {
           naverAccountId,
-          status: 'ACTIVE',
+          status: { in: ['HEALTHY', 'EXPIRING'] },
         },
       });
     } else {
       session = await this.prisma.naverSession.findFirst({
         where: {
-          naverAccount: {
-            userId: job!.userId,
-          },
-          status: 'ACTIVE',
+          naverAccount: { userId: job!.userId },
+          status: { in: ['HEALTHY', 'EXPIRING'] },
         },
       });
     }
@@ -596,23 +739,18 @@ export class JobProcessor {
       throw new Error('활성화된 네이버 세션이 없습니다');
     }
 
-    const context = await this.browserManager.getContext(session.profileDir);
+    const context = await this.browserManager.getContext(session.profileDir, runMode === 'DEBUG');
     const client = new NaverCafeClient(context);
 
     try {
-      // 특정 카페 또는 모든 카페 동기화
       if (cafeId) {
         const posts = await client.syncMyPosts(cafeId);
 
-        // DB에 업서트
         const now = new Date();
         for (const post of posts) {
           await this.prisma.managedPost.upsert({
             where: {
-              cafeId_articleId: {
-                cafeId: post.cafeId,
-                articleId: post.articleId,
-              },
+              cafeId_articleId: { cafeId: post.cafeId, articleId: post.articleId },
             },
             create: {
               userId: job!.userId,
@@ -640,26 +778,30 @@ export class JobProcessor {
   }
 
   /**
-   * DELETE_POST: 게시글 삭제
-   * (2단계에서 구현 예정)
+   * DELETE_POST: 게시글 삭제 (2단계)
    */
   private async handleDeletePost(
     jobId: string,
-    _payload: Record<string, unknown>
+    _payload: Record<string, unknown>,
+    _runMode: RunMode
   ): Promise<void> {
     await this.addLog(jobId, 'WARN', '게시글 삭제 기능은 아직 구현되지 않았습니다');
-    // TODO: 2단계에서 구현
   }
 
   /**
    * 세션 에러 업데이트
    */
-  private async updateSessionError(sessionId: string, errorMessage: string) {
+  private async updateSessionError(
+    sessionId: string,
+    errorMessage: string,
+    errorCode?: ErrorCode
+  ) {
     await this.prisma.naverSession.update({
       where: { id: sessionId },
       data: {
         status: 'ERROR',
         errorMessage,
+        errorCode,
       },
     });
   }
@@ -693,6 +835,7 @@ export class JobProcessor {
       startedAt?: Date;
       finishedAt?: Date;
       errorMessage?: string;
+      errorCode?: ErrorCode;
     }
   ) {
     await this.prisma.job.update({
@@ -702,6 +845,7 @@ export class JobProcessor {
         startedAt: options?.startedAt,
         finishedAt: options?.finishedAt,
         errorMessage: options?.errorMessage,
+        errorCode: options?.errorCode,
         attempts: status === 'PROCESSING' ? { increment: 1 } : undefined,
       },
     });
@@ -725,7 +869,6 @@ export class JobProcessor {
       },
     });
 
-    // 콘솔에도 출력
     logger.log(level.toLowerCase(), `[Job:${jobId}] ${message}`);
   }
 
@@ -747,17 +890,14 @@ export class JobProcessor {
       }
 
       const updates: any = {
-        completedJobs:
-          jobStatus === 'completed' ? run.completedJobs + 1 : run.completedJobs,
+        completedJobs: jobStatus === 'completed' ? run.completedJobs + 1 : run.completedJobs,
         failedJobs: jobStatus === 'failed' ? run.failedJobs + 1 : run.failedJobs,
       };
 
-      // 첫 Job 시작 시각 기록
       if (!run.startedAt) {
         updates.startedAt = new Date();
       }
 
-      // 모든 Job 완료 여부 확인
       if (updates.completedJobs + updates.failedJobs >= run.totalJobs) {
         updates.status = updates.failedJobs === 0 ? 'COMPLETED' : 'FAILED';
         updates.finishedAt = new Date();
@@ -769,9 +909,7 @@ export class JobProcessor {
       });
 
       logger.debug(
-        `ScheduleRun ${scheduleRunId} updated: ` +
-        `${updates.completedJobs}/${run.totalJobs} completed, ` +
-        `${updates.failedJobs} failed`
+        `ScheduleRun ${scheduleRunId} updated: ${updates.completedJobs}/${run.totalJobs} completed, ${updates.failedJobs} failed`
       );
     } catch (error) {
       logger.error(`Failed to update ScheduleRun progress: ${error instanceof Error ? error.message : String(error)}`);

@@ -41,6 +41,15 @@ export type IntegrationStatusType =
   | 'ACTION_REQUIRED' // 조치 필요 (재연동 필요)
   | 'NOT_CONNECTED';  // 미연결
 
+/** 세션 상태 타입 (스키마의 SessionStatus와 일치) */
+export type SessionStatusType =
+  | 'PENDING'
+  | 'HEALTHY'
+  | 'EXPIRING'
+  | 'EXPIRED'
+  | 'CHALLENGE_REQUIRED'
+  | 'ERROR';
+
 /** 연동 상태 응답 */
 export interface IntegrationStatusResponse {
   /** 전체 연동 상태 */
@@ -59,7 +68,7 @@ export interface IntegrationStatusResponse {
     /** 세션 ID */
     id: string;
     /** 세션 상태 */
-    status: 'PENDING' | 'ACTIVE' | 'EXPIRED' | 'ERROR';
+    status: SessionStatusType;
     /** 마지막 검증 시간 */
     lastVerifiedAt: string | null;
     /** 에러 메시지 */
@@ -286,3 +295,6 @@ export interface RecentResultsResponse {
   /** 총 개수 */
   total: number;
 }
+
+
+

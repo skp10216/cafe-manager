@@ -95,7 +95,7 @@ export class ScheduleController {
   }
 
   /**
-   * 스케줄 상태 토글 (활성화/비활성화)
+   * 스케줄 상태 토글 (활성화/비활성화) - 레거시
    * PATCH /api/schedules/:id/toggle
    */
   @Patch(':id/toggle')
@@ -105,6 +105,19 @@ export class ScheduleController {
     @Body() dto: ToggleScheduleDto
   ) {
     return this.scheduleService.toggle(id, user.userId, dto.status);
+  }
+
+  /**
+   * 사용자 활성화 토글 (userEnabled)
+   * PATCH /api/schedules/:id/toggle-enabled
+   */
+  @Patch(':id/toggle-enabled')
+  async toggleEnabled(
+    @CurrentUser() user: RequestUser,
+    @Param('id') id: string,
+    @Body() dto: { enabled: boolean }
+  ) {
+    return this.scheduleService.toggleUserEnabled(id, user.userId, dto.enabled);
   }
 
   /**
@@ -149,12 +162,13 @@ export class ScheduleController {
       throw new BadRequestException('오늘은 이미 실행되었습니다');
     }
 
-    // 4. N개 Job 생성
-    await this.scheduleRunner.createJobsForRun(fullSchedule, run);
+    // 4. N개 Job 생성 (즉시 실행은 sessionStatus=null)
+    await this.scheduleRunner.createJobsForRun(fullSchedule, run, null);
 
     return { success: true, runId: run.id };
   }
 }
+
 
 
 

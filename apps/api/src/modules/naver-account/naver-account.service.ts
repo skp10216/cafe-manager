@@ -1,6 +1,8 @@
 /**
  * NaverAccount 서비스
  * 네이버 계정 비즈니스 로직 (User와 네이버 계정 분리)
+ * 
+ * 개선: 계정 생성 시 자동으로 세션 연동까지 한 번에 처리
  */
 
 import {
@@ -9,17 +11,25 @@ import {
   ForbiddenException,
   ConflictException,
   Logger,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { PrismaService } from '@/common/prisma/prisma.service';
 import { CreateNaverAccountDto } from './dto/create-naver-account.dto';
 import { UpdateNaverAccountDto } from './dto/update-naver-account.dto';
+import { JobService } from '../job/job.service';
 import { encrypt } from '@cafe-manager/core';
+import { randomUUID } from 'crypto';
 
 @Injectable()
 export class NaverAccountService {
   private readonly logger = new Logger(NaverAccountService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => JobService))
+    private readonly jobService: JobService,
+  ) {}
 
   /**
    * 사용자의 모든 네이버 계정 조회
@@ -97,11 +107,17 @@ export class NaverAccountService {
   }
 
   /**
-   * 새 네이버 계정 등록
+   * 새 네이버 계정 등록 + 자동 세션 연동
+   * 
+   * 개선된 플로우:
+   * 1. 네이버 계정 등록
+   * 2. 세션 자동 생성
+   * 3. INIT_SESSION Job 자동 생성
+   * → 사용자는 한 번의 요청으로 연동까지 완료
    */
   async create(userId: string, dto: CreateNaverAccountDto) {
     this.logger.log(
-      `네이버 계정 등록 시작: userId=${userId}, loginId=${dto.loginId}`
+      `네이버 계정 등록 + 자동 연동 시작: userId=${userId}, loginId=${dto.loginId}`
     );
 
     // 동일 사용자의 중복 네이버 아이디 체크
@@ -119,25 +135,80 @@ export class NaverAccountService {
     // 비밀번호 암호화
     const passwordEncrypted = encrypt(dto.password);
 
-    // DB 저장
-    const account = await this.prisma.naverAccount.create({
-      data: {
-        userId,
-        loginId: dto.loginId,
-        passwordEncrypted,
-        displayName: dto.displayName || dto.loginId,
-        status: 'ACTIVE',
-      },
+    // 프로필 디렉토리 경로 생성 (계정 ID + UUID)
+    const profileDir = `naver-${dto.loginId}-${randomUUID().slice(0, 8)}`;
+
+    // 트랜잭션으로 계정 + 세션 동시 생성
+    const result = await this.prisma.$transaction(async (tx) => {
+      // 1. 계정 생성
+      const account = await tx.naverAccount.create({
+        data: {
+          userId,
+          loginId: dto.loginId,
+          passwordEncrypted,
+          displayName: dto.displayName || dto.loginId,
+          status: 'ACTIVE',
+        },
+      });
+
+      // 2. 세션 자동 생성 (PENDING 상태)
+      const session = await tx.naverSession.create({
+        data: {
+          naverAccountId: account.id,
+          profileDir,
+          status: 'PENDING',
+        },
+      });
+
+      return { account, session };
     });
 
     this.logger.log(
-      `네이버 계정 등록 완료: accountId=${account.id}, loginId=${account.loginId}`
+      `네이버 계정 + 세션 DB 생성 완료: accountId=${result.account.id}, sessionId=${result.session.id}`
     );
 
-    // 비밀번호 제외하고 반환
+    // 3. INIT_SESSION Job 생성 (트랜잭션 외부에서 - 실패해도 롤백 불필요)
+    try {
+      await this.jobService.createJob({
+        type: 'INIT_SESSION',
+        userId,
+        payload: {
+          naverAccountId: result.account.id,
+          naverSessionId: result.session.id,
+          profileDir,
+        },
+      });
+
+      this.logger.log(
+        `INIT_SESSION Job 자동 생성 성공: accountId=${result.account.id}, sessionId=${result.session.id}`
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+
+      this.logger.error(
+        `INIT_SESSION Job 생성 실패: sessionId=${result.session.id}, error=${message}`,
+        error instanceof Error ? error.stack : undefined
+      );
+
+      // Job 생성 실패 시 세션 상태를 ERROR로 업데이트
+      await this.prisma.naverSession.update({
+        where: { id: result.session.id },
+        data: {
+          status: 'ERROR',
+          errorMessage: `자동 연동 Job 생성 실패: ${message}`,
+        },
+      });
+    }
+
+    // 응답에 세션 정보도 포함
     return {
-      ...account,
+      ...result.account,
       passwordEncrypted: undefined,
+      session: {
+        id: result.session.id,
+        status: result.session.status,
+        profileDir: result.session.profileDir,
+      },
     };
   }
 
@@ -226,6 +297,8 @@ export class NaverAccountService {
     });
   }
 }
+
+
 
 
 

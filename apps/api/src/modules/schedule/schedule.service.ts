@@ -87,10 +87,10 @@ export class ScheduleService {
    * 스케줄 생성
    */
   async create(userId: string, dto: CreateScheduleDto) {
-    // cronExpr 또는 intervalMinutes 중 하나는 필수
-    if (!dto.cronExpr && !dto.intervalMinutes) {
+    // runTime은 필수 (HH:mm 형식)
+    if (!dto.runTime || !/^\d{2}:\d{2}$/.test(dto.runTime)) {
       throw new BadRequestException(
-        'cron 표현식 또는 실행 간격(분) 중 하나를 입력하세요'
+        '실행 시간(runTime)은 HH:mm 형식으로 입력하세요 (예: 09:00)'
       );
     }
 
@@ -107,19 +107,18 @@ export class ScheduleService {
       throw new ForbiddenException('해당 템플릿에 접근할 수 없습니다');
     }
 
-    // 다음 실행 시간 계산
-    const nextRunAt = this.calculateNextRunAt(dto.cronExpr ?? null, dto.intervalMinutes ?? null);
-
     return this.prisma.schedule.create({
       data: {
         userId,
         templateId: dto.templateId,
         name: dto.name,
-        cronExpr: dto.cronExpr,
-        intervalMinutes: dto.intervalMinutes,
-        maxPostsPerDay: dto.maxPostsPerDay ?? 10,
-        nextRunAt,
-        status: 'PAUSED', // 기본값은 비활성화
+        runTime: dto.runTime,
+        dailyPostCount: dto.dailyPostCount ?? 10,
+        postIntervalMinutes: dto.postIntervalMinutes ?? 5,
+        timezone: dto.timezone ?? 'Asia/Seoul',
+        status: 'PAUSED', // 기본값은 비활성화 (사용자가 직접 활성화)
+        userEnabled: false, // 기본값은 비활성화 (사용자가 직접 활성화)
+        adminStatus: 'APPROVED', // 자동 승인 처리
       },
       include: {
         template: {
@@ -181,27 +180,44 @@ export class ScheduleService {
   }
 
   /**
-   * 스케줄 상태 토글
+   * 스케줄 상태 토글 (레거시 status 필드 사용)
    */
   async toggle(id: string, userId: string, status: ScheduleStatus) {
     // 소유권 확인
-    const schedule = await this.findOne(id, userId);
+    await this.findOne(id, userId);
 
-    const updateData: Record<string, unknown> = { status };
-
-    // 활성화 시 다음 실행 시간 재계산
-    if (status === 'ACTIVE') {
-      updateData.nextRunAt = this.calculateNextRunAt(
-        schedule.cronExpr,
-        schedule.intervalMinutes
-      );
-      // 오늘 포스팅 카운트 리셋 (날짜가 바뀌었을 수 있음)
-      updateData.todayPostCount = 0;
-    }
+    const updateData: Record<string, unknown> = { 
+      status,
+      userEnabled: status === 'ACTIVE', // userEnabled도 함께 업데이트
+    };
 
     return this.prisma.schedule.update({
       where: { id },
       data: updateData,
+      include: {
+        template: {
+          select: {
+            id: true,
+            name: true,
+          },
+        },
+      },
+    });
+  }
+
+  /**
+   * 사용자 활성화 토글 (userEnabled)
+   */
+  async toggleUserEnabled(id: string, userId: string, enabled: boolean) {
+    // 소유권 확인
+    await this.findOne(id, userId);
+
+    return this.prisma.schedule.update({
+      where: { id },
+      data: {
+        userEnabled: enabled,
+        status: enabled ? 'ACTIVE' : 'PAUSED', // 레거시 호환
+      },
       include: {
         template: {
           select: {

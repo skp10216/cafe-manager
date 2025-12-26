@@ -12,3 +12,8 @@ export { default as RecentResultsList } from './RecentResultsList';
 export type { RecentResultItem } from './RecentResultsList';
 export { default as FailureSummary } from './FailureSummary';
 export type { FailureCategoryItem } from './FailureSummary';
+export { default as OnboardingChecklist } from './OnboardingChecklist';
+export type { OnboardingStatus } from './OnboardingChecklist';
+
+
+

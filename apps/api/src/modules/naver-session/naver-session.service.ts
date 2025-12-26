@@ -89,7 +89,7 @@ export class NaverSessionService {
         naverAccount: {
           userId,
         },
-        status: 'ACTIVE',
+        status: 'HEALTHY',
       },
       include: {
         naverAccount: {
@@ -110,7 +110,7 @@ export class NaverSessionService {
     return this.prisma.naverSession.findFirst({
       where: {
         naverAccountId,
-        status: 'ACTIVE',
+        status: 'HEALTHY',
       },
     });
   }
@@ -137,11 +137,11 @@ export class NaverSessionService {
       throw new ForbiddenException('해당 네이버 계정에 대한 접근 권한이 없습니다');
     }
 
-    // 이미 PENDING/ACTIVE 세션이 있는지 확인
+    // 이미 PENDING/HEALTHY 세션이 있는지 확인
     const existingSession = await this.prisma.naverSession.findFirst({
       where: {
         naverAccountId: dto.naverAccountId,
-        status: { in: ['PENDING', 'ACTIVE'] },
+        status: { in: ['PENDING', 'HEALTHY'] },
       },
     });
 
@@ -149,7 +149,7 @@ export class NaverSessionService {
       if (existingSession.status === 'PENDING') {
         throw new ConflictException('이미 세션 연동이 진행 중입니다');
       }
-      if (existingSession.status === 'ACTIVE') {
+      if (existingSession.status === 'HEALTHY') {
         throw new ConflictException('이미 활성화된 세션이 있습니다');
       }
     }
@@ -297,7 +297,7 @@ export class NaverSessionService {
    */
   async updateStatus(
     id: string,
-    status: 'ACTIVE' | 'EXPIRED' | 'ERROR',
+    status: 'HEALTHY' | 'EXPIRING' | 'EXPIRED' | 'CHALLENGE_REQUIRED' | 'ERROR',
     options?: {
       errorMessage?: string;
     }
@@ -307,7 +307,7 @@ export class NaverSessionService {
       data: {
         status,
         errorMessage: options?.errorMessage || null,
-        lastVerifiedAt: status === 'ACTIVE' ? new Date() : undefined,
+        lastVerifiedAt: status === 'HEALTHY' ? new Date() : undefined,
       },
     });
   }

@@ -404,6 +404,12 @@ export const scheduleApi = {
       body: { status },
     }),
 
+  toggleEnabled: (id: string, enabled: boolean) =>
+    request<Schedule>(`/schedules/${id}/toggle-enabled`, {
+      method: 'PATCH',
+      body: { enabled },
+    }),
+
   runNow: (id: string) =>
     request<{ success: boolean; runId: string }>(`/schedules/${id}/run-now`, {
       method: 'POST',
@@ -560,9 +566,18 @@ export interface NaverAccount {
   createdAt: string;
   sessions?: Array<{
     id: string;
-    status: 'PENDING' | 'ACTIVE' | 'EXPIRED' | 'ERROR';
+    status: SessionStatus;
     lastVerifiedAt: string | null;
   }>;
+}
+
+/** 계정 생성 시 세션 정보도 함께 반환 (자동 연동) */
+export interface NaverAccountCreateResponse extends NaverAccount {
+  session?: {
+    id: string;
+    status: SessionStatus;
+    profileDir: string;
+  };
 }
 
 export const naverAccountApi = {
@@ -572,9 +587,9 @@ export const naverAccountApi = {
   /** 네이버 계정 상세 조회 */
   get: (id: string) => request<NaverAccount>(`/naver-accounts/${id}`),
 
-  /** 새 네이버 계정 등록 */
+  /** 새 네이버 계정 등록 + 자동 세션 연동 */
   create: (data: { loginId: string; password: string; displayName?: string }) =>
-    request<NaverAccount>('/naver-accounts', {
+    request<NaverAccountCreateResponse>('/naver-accounts', {
       method: 'POST',
       body: data,
     }),
@@ -594,13 +609,24 @@ export const naverAccountApi = {
 // NaverSession API (브라우저 세션)
 // ============================================
 
+/** 세션 상태 (5단계 운영형 - 고도화 후) */
+export type SessionStatus = 
+  | 'PENDING'             // 세션 초기화 대기 중
+  | 'HEALTHY'             // 정상 동작 (구 ACTIVE)
+  | 'EXPIRING'            // 곧 만료 예정 (7일 내)
+  | 'EXPIRED'             // 만료됨
+  | 'CHALLENGE_REQUIRED'  // 추가 인증 필요 (CAPTCHA/2FA)
+  | 'ERROR';              // 오류 발생
+
 export interface NaverSession {
   id: string;
   naverAccountId: string;
   profileDir: string;
-  status: 'PENDING' | 'ACTIVE' | 'EXPIRED' | 'ERROR';
+  status: SessionStatus;
   lastVerifiedAt: string | null;
+  lastCheckedAt?: string | null;
   errorMessage: string | null;
+  errorCode?: string | null;
   naverNickname: string | null; // 검증된 네이버 닉네임
   createdAt: string;
   naverAccount?: {
