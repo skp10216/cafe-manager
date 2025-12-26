@@ -15,6 +15,7 @@ export interface JwtPayload {
 /** 요청에 포함된 사용자 정보 */
 export interface RequestUser extends JwtPayload {
   userId: string;
+  role: string;  // 사용자 권한 (USER, ADMIN)
 }
 
 /**

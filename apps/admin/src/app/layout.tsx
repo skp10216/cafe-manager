@@ -7,6 +7,7 @@
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { CssBaseline, Box } from '@mui/material';
 import { Noto_Sans_KR } from 'next/font/google';
+import AuthProvider from '@/components/AuthProvider';
 
 const notoSansKr = Noto_Sans_KR({
   subsets: ['latin'],
@@ -110,14 +111,16 @@ export default function RootLayout({
       <body className={notoSansKr.className}>
         <ThemeProvider theme={adminTheme}>
           <CssBaseline />
-          <Box
-            sx={{
-              minHeight: '100vh',
-              bgcolor: 'background.default',
-            }}
-          >
-            {children}
-          </Box>
+          <AuthProvider>
+            <Box
+              sx={{
+                minHeight: '100vh',
+                bgcolor: 'background.default',
+              }}
+            >
+              {children}
+            </Box>
+          </AuthProvider>
         </ThemeProvider>
       </body>
     </html>

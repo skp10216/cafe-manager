@@ -27,6 +27,7 @@ import { UploadModule } from './modules/upload/upload.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { AuditLogModule } from './modules/audit-log/audit-log.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { WorkerMonitorModule } from './modules/worker-monitor/worker-monitor.module';
 
 @Module({
   imports: [
@@ -87,6 +88,7 @@ import { AdminModule } from './modules/admin/admin.module';
     DashboardModule,
     AuditLogModule,
     AdminModule,
+    WorkerMonitorModule,
   ],
 })
 export class AppModule {}

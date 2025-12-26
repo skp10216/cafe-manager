@@ -629,6 +629,9 @@ enum EntityType {
   TEMPLATE
   JOB
   POLICY
+  QUEUE     // Worker Monitor: 큐
+  WORKER    // Worker Monitor: 워커
+  INCIDENT  // Worker Monitor: 이상 징후
 }
 
 /// 감사 행위 타입
@@ -654,6 +657,25 @@ enum AuditAction {
   
   // 시스템 관련
   AUTO_SUSPEND          // 자동 중지 (연속 실패 등)
+  
+  // Worker Monitor: 큐 관련 (P1)
+  QUEUE_PAUSE           // 큐 일시정지
+  QUEUE_RESUME          // 큐 재개
+  QUEUE_DRAIN           // 큐 대기 작업 제거
+  QUEUE_CLEAN           // 큐 완료/실패 정리
+  QUEUE_RETRY_FAILED    // 실패 작업 일괄 재시도
+  
+  // Worker Monitor: Job 관련 (P1)
+  JOB_RETRY             // 작업 재시도
+  JOB_CANCEL            // 작업 취소
+  
+  // Worker Monitor: 워커 관련 (P2)
+  WORKER_ONLINE         // 워커 시작 감지
+  WORKER_OFFLINE        // 워커 종료 감지
+  
+  // Worker Monitor: Incident 관련 (P2)
+  INCIDENT_ACKNOWLEDGE  // 이상 징후 확인
+  INCIDENT_RESOLVE      // 이상 징후 해결
 }
 
 // ==============================================
@@ -700,4 +722,90 @@ model PostRule {
 /// 규칙 타입
 enum PostRuleType {
   MAX_COUNT  // 최대 N개 유지
+}
+
+// ==============================================
+// Worker Monitor - 큐 통계 스냅샷 (P0)
+// ==============================================
+
+/// 큐 통계 스냅샷 (1분 단위 수집)
+model QueueStatsSnapshot {
+  id            String   @id @default(cuid())
+  queueName     String   @map("queue_name")
+  
+  // 작업 카운트
+  waiting       Int      @default(0)
+  active        Int      @default(0)
+  delayed       Int      @default(0)
+  completed     Int      @default(0)
+  failed        Int      @default(0)
+  
+  // 큐 상태
+  paused        Boolean  @default(false)
+  
+  // 성능 지표 (P0에서는 jobsPerMin만)
+  jobsPerMin    Int?     @map("jobs_per_min")
+  
+  // 워커 상태 요약
+  onlineWorkers Int      @default(0) @map("online_workers")
+  
+  timestamp     DateTime @default(now())
+  
+  @@index([queueName, timestamp])
+  @@index([timestamp])
+  @@map("queue_stats_snapshots")
+}
+
+// ==============================================
+// Worker Monitor - 이상 징후 (P2에서 활성화)
+// ==============================================
+
+/// 이상 징후 (Incident)
+model Incident {
+  id                String           @id @default(cuid())
+  type              IncidentType
+  severity          IncidentSeverity
+  
+  queueName         String?          @map("queue_name")
+  affectedJobs      Int              @default(0) @map("affected_jobs")
+  
+  title             String
+  description       String?          @db.Text
+  recommendedAction String?          @map("recommended_action") @db.Text
+  
+  status            IncidentStatus   @default(ACTIVE)
+  resolvedAt        DateTime?        @map("resolved_at")
+  resolvedBy        String?          @map("resolved_by")
+  
+  startedAt         DateTime         @default(now()) @map("started_at")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  @@unique([type, queueName, status])  // 중복 방지용 복합 유니크
+  @@index([status, startedAt])
+  @@index([type])
+  @@map("incidents")
+}
+
+/// 이상 징후 타입
+enum IncidentType {
+  QUEUE_BACKLOG       // 대기열 적체 (P2)
+  HIGH_FAILURE_RATE   // 높은 실패율 (P2)
+  WORKER_DOWN         // 워커 다운 (P3)
+  SLOW_PROCESSING     // 처리 시간 급증 (P3)
+}
+
+/// 이상 징후 심각도
+enum IncidentSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+/// 이상 징후 상태
+enum IncidentStatus {
+  ACTIVE        // 진행 중
+  RESOLVED      // 해결됨
+  ACKNOWLEDGED  // 확인됨 (처리 중)
 }

@@ -21,6 +21,12 @@ export type JobType = (typeof JOB_TYPES)[keyof typeof JOB_TYPES];
 /** Job 큐 이름 */
 export const QUEUE_NAMES = {
   CAFE_JOBS: 'cafe-jobs',
+  SYSTEM_JOBS: 'system-jobs',  // Worker Monitor 시스템 작업용
+} as const;
+
+/** 시스템 Job 타입 */
+export const SYSTEM_JOB_TYPES = {
+  COLLECT_STATS_SNAPSHOT: 'COLLECT_STATS_SNAPSHOT',  // 큐 통계 스냅샷 수집
 } as const;
 
 /** 기본 Job 재시도 횟수 */

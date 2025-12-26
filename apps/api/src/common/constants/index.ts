@@ -33,7 +33,26 @@ export const DEFAULT_JOB_MAX_ATTEMPTS = 3;
 /** Job 큐 이름 */
 export const QUEUE_NAMES = {
   CAFE_JOBS: 'cafe-jobs',
+  SYSTEM_JOBS: 'system-jobs',  // Worker Monitor 시스템 작업용
 } as const;
+
+/** 시스템 Job 타입 */
+export const SYSTEM_JOB_TYPES = {
+  COLLECT_STATS_SNAPSHOT: 'COLLECT_STATS_SNAPSHOT',  // 큐 통계 스냅샷 수집
+} as const;
+
+// ============================================
+// Worker Monitor 관련 상수
+// ============================================
+
+/** Redis 키 (Worker Heartbeat) */
+export const HEARTBEAT_REDIS_KEYS = {
+  HEARTBEAT_KEY: 'cafe-manager:workers:heartbeat',       // ZSET
+  WORKER_INFO_PREFIX: 'cafe-manager:workers:info:',      // STRING + TTL
+} as const;
+
+/** 워커 온라인 판정 임계값 (ms) */
+export const WORKER_ONLINE_THRESHOLD_MS = 30_000;  // 30초
 
 // ============================================
 // 네이버 세션 관련 상수

@@ -31,6 +31,7 @@ interface AuthResponse {
     id: string;
     email: string;
     name: string | null;
+    role: string;
   };
 }
 
@@ -132,6 +133,7 @@ export class AuthService {
         id: true,
         email: true,
         name: true,
+        role: true,
         planType: true,
         expireAt: true,
         createdAt: true,
@@ -152,6 +154,7 @@ export class AuthService {
     id: string;
     email: string;
     name: string | null;
+    role: string;
   }): AuthResponse {
     const payload: JwtPayload = {
       sub: user.id,
@@ -174,6 +177,7 @@ export class AuthService {
         id: user.id,
         email: user.email,
         name: user.name,
+        role: user.role,
       },
     };
   }

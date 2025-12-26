@@ -11,6 +11,9 @@ importers:
       '@prisma/client':
         specifier: 5.22.0
         version: 5.22.0(prisma@5.22.0)
+      ioredis:
+        specifier: ^5.8.2
+        version: 5.8.2
     devDependencies:
       '@types/bcrypt':
         specifier: ^5.0.2
@@ -139,6 +142,9 @@ importers:
       class-validator:
         specifier: ^0.14.0
         version: 0.14.3
+      ioredis:
+        specifier: ^5.8.2
+        version: 5.8.2
       multer:
         specifier: ^2.0.2
         version: 2.0.2

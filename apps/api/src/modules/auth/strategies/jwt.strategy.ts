@@ -36,10 +36,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
    * 반환된 객체는 request.user에 저장됨
    */
   async validate(payload: JwtPayload): Promise<RequestUser> {
-    // 사용자 존재 확인
+    // 사용자 존재 확인 (role 포함)
     const user = await this.prisma.user.findUnique({
       where: { id: payload.sub },
-      select: { id: true, email: true },
+      select: { id: true, email: true, role: true },
     });
 
     if (!user) {
@@ -50,6 +50,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       userId: user.id,
       sub: payload.sub,
       email: payload.email,
+      role: user.role,
     };
   }
 }

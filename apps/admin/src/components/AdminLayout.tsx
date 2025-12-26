@@ -30,9 +30,11 @@ import {
   Logout,
   Menu as MenuIcon,
   AdminPanelSettings,
+  Memory,
 } from '@mui/icons-material';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
+import { useAuth } from './AuthProvider';
 
 const DRAWER_WIDTH = 260;
 
@@ -41,6 +43,7 @@ const NAV_ITEMS = [
   { label: '대시보드', icon: Dashboard, href: '/' },
   { label: '스케줄 승인', icon: Schedule, href: '/schedules' },
   { label: '세션 모니터', icon: LinkIcon, href: '/sessions' },
+  { label: '워커 모니터', icon: Memory, href: '/worker-monitor' },
   { label: '사용자 관리', icon: People, href: '/users' },
   { label: '감사 로그', icon: History, href: '/audit' },
   { label: '정책 설정', icon: Settings, href: '/policies' },
@@ -49,10 +52,10 @@ const NAV_ITEMS = [
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user, logout } = useAuth();
 
   const handleLogout = () => {
-    localStorage.removeItem('token');
-    window.location.href = '/login';
+    logout();
   };
 
   const drawer = (
@@ -136,8 +139,20 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
       <Divider sx={{ borderColor: 'divider' }} />
 
+      {/* 현재 사용자 정보 */}
+      {user && (
+        <Box sx={{ px: 2, py: 1.5 }}>
+          <Typography variant="caption" color="text.secondary">
+            로그인:
+          </Typography>
+          <Typography variant="body2" sx={{ fontWeight: 500 }}>
+            {user.name || user.email}
+          </Typography>
+        </Box>
+      )}
+
       {/* 하단 로그아웃 */}
-      <Box sx={{ p: 2 }}>
+      <Box sx={{ p: 2, pt: 0 }}>
         <ListItemButton
           onClick={handleLogout}
           sx={{
