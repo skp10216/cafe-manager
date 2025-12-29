@@ -513,6 +513,9 @@ export class JobProcessor {
 
   /**
    * CREATE_POST: 게시글 작성
+   * 
+   * [JIT 개선] 실행 전 스케줄 활성 상태 체크
+   * - 스케줄이 비활성화된 경우 Job을 스킵 (CANCELLED 처리)
    */
   private async handleCreatePost(
     jobId: string,
@@ -529,6 +532,7 @@ export class JobProcessor {
       tradeMethod,
       tradeLocation,
       naverAccountId,
+      scheduleId,
       currentPostNumber,
       totalPosts,
     } = payload as {
@@ -541,9 +545,56 @@ export class JobProcessor {
       tradeMethod?: 'DIRECT' | 'DELIVERY' | 'BOTH';
       tradeLocation?: string;
       naverAccountId?: string;
+      scheduleId?: string;
       currentPostNumber?: number;
       totalPosts?: number;
     };
+
+    // [JIT 개선] 스케줄 활성 상태 체크 (스케줄 기반 Job인 경우)
+    if (scheduleId) {
+      const schedule = await this.prisma.schedule.findUnique({
+        where: { id: scheduleId },
+        select: { userEnabled: true, adminStatus: true, name: true },
+      });
+
+      if (!schedule) {
+        logger.warn(`스케줄을 찾을 수 없음: ${scheduleId}, Job 스킵 처리`);
+        await this.addLog(jobId, 'WARN', '스케줄을 찾을 수 없어 작업을 스킵합니다');
+        
+        // Job 상태를 CANCELLED로 변경
+        await this.prisma.job.update({
+          where: { id: jobId },
+          data: {
+            status: 'CANCELLED',
+            errorMessage: '스케줄을 찾을 수 없음',
+            finishedAt: new Date(),
+          },
+        });
+        return;
+      }
+
+      if (!schedule.userEnabled || schedule.adminStatus !== 'APPROVED') {
+        logger.info(
+          `스케줄 "${schedule.name}" 비활성화 상태: userEnabled=${schedule.userEnabled}, adminStatus=${schedule.adminStatus}, Job 스킵`
+        );
+        await this.addLog(
+          jobId,
+          'INFO',
+          `스케줄이 비활성화 상태이므로 작업을 스킵합니다 (userEnabled=${schedule.userEnabled}, adminStatus=${schedule.adminStatus})`
+        );
+
+        // Job 상태를 CANCELLED로 변경
+        await this.prisma.job.update({
+          where: { id: jobId },
+          data: {
+            status: 'CANCELLED',
+            errorMessage: '스케줄 비활성화로 스킵됨',
+            finishedAt: new Date(),
+          },
+        });
+        return;
+      }
+    }
 
     // 진행 상황 표시 (예: "[2/3]" 또는 빈 문자열)
     const progressText = (currentPostNumber && totalPosts)

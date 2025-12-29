@@ -509,16 +509,14 @@ export class ScheduleRunner {
   }
 
   /**
-   * 1개 Job 생성 (5분 간격 방식)
+   * 1개 Job 생성 (JIT 방식)
    * 
-   * [변경됨] 기존 createJobsForRun을 대체
-   * - 1개 Job만 생성
-   * - todayPostedCount 증가
-   * - nextPostAt 업데이트
-   * 
-   * [버그 수정] 
-   * - Job 생성 전 최종 확인으로 초과 생성 방지
-   * - nextPostAt을 먼저 미래로 설정하여 중복 실행 방지 (락 역할)
+   * [JIT 개선] 6가지 리스크 해결
+   * 1. N회 보장: todayPostedCount < dailyPostCount 체크
+   * 2. 중복 방지: 결정적 jobId + 조건부 원자적 업데이트
+   * 3. 고정 간격: runTime 기준 계산
+   * 4. catch-up: nextPostAt <= now면 즉시 생성
+   * 5. 취소 대응: 스케줄 상태 체크
    * 
    * public으로 노출하여 즉시 실행에서도 사용 가능
    */
@@ -528,9 +526,80 @@ export class ScheduleRunner {
     sessionStatus: SessionStatus | null,
     now: Date,
   ) {
-    // [중요] Job 생성 직전 최종 확인 - 목표 초과 방지
+    const scheduleId = schedule.id;
+    const runId = run.id;
+
+    // ============================================================
+    // [1단계] 먼저 스케줄 조회하여 목표 달성 여부 확인
+    // ============================================================
+    const currentSchedule = await this.prisma.schedule.findUnique({
+      where: { id: scheduleId },
+      select: { 
+        todayPostedCount: true, 
+        dailyPostCount: true,
+        postIntervalMinutes: true,
+        runTime: true,
+        userEnabled: true,
+        adminStatus: true,
+        nextPostAt: true,
+      },
+    });
+
+    if (!currentSchedule) {
+      this.logger.warn(`스케줄 ${scheduleId}: 조회 실패`);
+      return null;
+    }
+
+    // 스케줄 비활성화 체크
+    if (!currentSchedule.userEnabled || currentSchedule.adminStatus !== 'APPROVED') {
+      this.logger.debug(`스케줄 ${scheduleId}: 비활성화 상태로 Job 생성 스킵`);
+      return null;
+    }
+
+    // 목표 달성 체크 (Job 생성 전 체크)
+    if (currentSchedule.todayPostedCount >= currentSchedule.dailyPostCount) {
+      this.logger.debug(
+        `스케줄 ${scheduleId}: 이미 목표 달성 ` +
+        `(${currentSchedule.todayPostedCount}/${currentSchedule.dailyPostCount})`
+      );
+      await this.setNextPostAtForTomorrow(schedule, this.getTodayStart(now));
+      return null;
+    }
+
+    // ============================================================
+    // [2단계] 조건부 원자적 업데이트 - 중복 생성 방지
+    // nextPostAt 조건 + todayPostedCount 동시 증가로 락 역할
+    // ============================================================
+    const expectedCount = currentSchedule.todayPostedCount;
+    
+    const updateResult = await this.prisma.schedule.updateMany({
+      where: {
+        id: scheduleId,
+        // 조건 1: nextPostAt이 현재 시각 이하 (처리 대상)
+        nextPostAt: { lte: now },
+        // 조건 2: todayPostedCount가 조회 시점과 동일하고 목표 미달
+        // (다른 인스턴스에서 이미 증가하지 않았는지 확인 = 낙관적 락)
+        todayPostedCount: expectedCount,
+      },
+      data: {
+        // todayPostedCount 즉시 증가 (락 역할)
+        todayPostedCount: { increment: 1 },
+        // nextPostAt을 충분히 미래로 설정 (중복 방지)
+        nextPostAt: new Date(now.getTime() + currentSchedule.postIntervalMinutes * 60 * 1000),
+      },
+    });
+
+    // 업데이트 실패 = 이미 다른 인스턴스에서 처리 중
+    if (updateResult.count === 0) {
+      this.logger.debug(
+        `스케줄 ${scheduleId}: 조건부 업데이트 실패 (이미 처리됨, 목표 달성, 또는 동시 접근)`
+      );
+      return null;
+    }
+
+    // 업데이트 성공 - 최신 상태 다시 조회
     const latestSchedule = await this.prisma.schedule.findUnique({
-      where: { id: schedule.id },
+      where: { id: scheduleId },
       select: { 
         todayPostedCount: true, 
         dailyPostCount: true,
@@ -540,51 +609,35 @@ export class ScheduleRunner {
     });
 
     if (!latestSchedule) {
-      this.logger.warn(`스케줄 ${schedule.id}: Job 생성 직전 조회 실패`);
+      this.logger.warn(`스케줄 ${scheduleId}: 업데이트 후 조회 실패`);
       return null;
     }
 
-    if (latestSchedule.todayPostedCount >= latestSchedule.dailyPostCount) {
-      this.logger.warn(
-        `스케줄 ${schedule.id}: Job 생성 취소 - 이미 목표 달성 ` +
-        `(${latestSchedule.todayPostedCount}/${latestSchedule.dailyPostCount})`
-      );
-      // nextPostAt을 다음 날로 업데이트
-      await this.setNextPostAtForTomorrow(schedule, this.getTodayStart(now));
-      return null;
-    }
-
-    const currentPostNumber = latestSchedule.todayPostedCount + 1;
+    // todayPostedCount는 이미 조건부 업데이트에서 증가됨
+    // latestSchedule.todayPostedCount가 현재 포스팅 번호
+    const currentPostNumber = latestSchedule.todayPostedCount;
     const totalPosts = latestSchedule.dailyPostCount;
 
     // ============================================================
-    // [핵심 버그 수정] Job 생성 전에 먼저 nextPostAt + todayPostedCount 업데이트!
-    // 이렇게 해야 다른 Cron이 같은 스케줄을 중복 처리하지 않음
+    // [고정 간격 정책] runTime 기준으로 다음 시간 계산
     // ============================================================
-    const todayStart = this.getTodayStart(now);
-    let nextPostAt: Date;
+    const nextPostAt = this.calculateNextPostAtFixed(
+      latestSchedule.runTime,
+      currentPostNumber,
+      totalPosts,
+      latestSchedule.postIntervalMinutes,
+      now,
+    );
 
-    if (currentPostNumber >= totalPosts) {
-      // 이번이 마지막 → 다음 날 runTime
-      const [hours, minutes] = latestSchedule.runTime.split(':').map(Number);
-      nextPostAt = new Date(todayStart);
-      nextPostAt.setDate(nextPostAt.getDate() + 1);
-      nextPostAt.setHours(hours, minutes, 0, 0);
-    } else {
-      // 다음 포스팅 시각 = 현재 + postIntervalMinutes
-      nextPostAt = new Date(now.getTime() + latestSchedule.postIntervalMinutes * 60 * 1000);
-    }
-
-    // 원자적으로 todayPostedCount 증가 + nextPostAt 업데이트 (락 역할)
+    // nextPostAt만 정확히 재설정 (todayPostedCount는 이미 증가됨)
     await this.prisma.schedule.update({
-      where: { id: schedule.id },
+      where: { id: scheduleId },
       data: {
-        todayPostedCount: { increment: 1 },
         nextPostAt,
       },
     });
 
-    // 현재 시간과 다음 실행 시간의 차이 계산
+    // 로깅
     const diffMs = nextPostAt.getTime() - now.getTime();
     const diffMin = Math.round(diffMs / 60000);
     
@@ -595,8 +648,11 @@ export class ScheduleRunner {
     );
 
     // ============================================================
-    // 이제 안전하게 Job 생성
+    // [결정적 jobId] 중복 방지
+    // 형식: {scheduleRunId}_seq{sequenceNumber}
+    // 주의: BullMQ jobId에 콜론(:) 사용 불가
     // ============================================================
+    const deterministicId = `${runId}_seq${currentPostNumber}`;
     const runMode = this.determineRunMode(schedule);
 
     // 시스템 변수 생성
@@ -611,15 +667,16 @@ export class ScheduleRunner {
       .sort((a: any, b: any) => a.order - b.order)
       .map((img: any) => img.path);
 
-    // Job 생성 (delay 없음, 즉시 실행)
+    // Job 생성 (결정적 ID 사용)
     const job = await this.jobService.createJob({
       type: 'CREATE_POST',
       userId: schedule.userId,
-      scheduleRunId: run.id,
+      scheduleRunId: runId,
       sequenceNumber: currentPostNumber,
+      deterministicId,  // 중복 방지용 결정적 ID
       runMode,
       payload: {
-        scheduleId: schedule.id,
+        scheduleId,
         scheduleName: schedule.name,
         templateId: schedule.template.id,
         templateName: schedule.template.name,
@@ -633,7 +690,6 @@ export class ScheduleRunner {
         price: schedule.template.price,
         tradeMethod: schedule.template.tradeMethod,
         tradeLocation: schedule.template.tradeLocation,
-        // 진행 상황 표시를 위한 정보 (예: 2/3)
         currentPostNumber,
         totalPosts,
       },
@@ -642,20 +698,64 @@ export class ScheduleRunner {
     // lastRunDate 업데이트 (첫 번째 포스팅 시)
     if (currentPostNumber === 1) {
       await this.prisma.schedule.update({
-        where: { id: schedule.id },
+        where: { id: scheduleId },
         data: {
           lastRunDate: now,
-          consecutiveFailures: 0,  // 성공적으로 Job 생성했으므로 리셋
+          consecutiveFailures: 0,
         },
       });
     }
 
     this.logger.log(
       `✅ 스케줄 "${schedule.name}" Job 생성 완료: ${currentPostNumber}/${totalPosts} ` +
-      `(다음: +${latestSchedule.postIntervalMinutes}분 후, 모드: ${runMode})`
+      `(deterministicId: ${deterministicId}, 모드: ${runMode})`
     );
 
     return job;
+  }
+
+  /**
+   * [고정 간격 정책] runTime 기준으로 다음 포스팅 시각 계산
+   * 
+   * - 기준: 오늘 runTime + (postNumber * interval)
+   * - 이미 지난 시간이면 즉시 실행 (catch-up)
+   * - 마지막 포스팅이면 다음 날 runTime
+   */
+  private calculateNextPostAtFixed(
+    runTime: string,
+    currentPostNumber: number,
+    totalPosts: number,
+    postIntervalMinutes: number,
+    now: Date,
+  ): Date {
+    const todayStart = this.getTodayStart(now);
+    const [hours, minutes] = runTime.split(':').map(Number);
+
+    // 마지막 포스팅이면 다음 날 runTime
+    if (currentPostNumber >= totalPosts) {
+      const tomorrowRunTime = new Date(todayStart);
+      tomorrowRunTime.setDate(tomorrowRunTime.getDate() + 1);
+      tomorrowRunTime.setHours(hours, minutes, 0, 0);
+      return tomorrowRunTime;
+    }
+
+    // 오늘 runTime 기준
+    const baseTime = new Date(todayStart);
+    baseTime.setHours(hours, minutes, 0, 0);
+
+    // 다음 포스팅 시각 = baseTime + (currentPostNumber * interval)
+    // currentPostNumber는 이번에 생성한 번호이므로, 다음은 currentPostNumber번째 간격 후
+    const nextTime = new Date(
+      baseTime.getTime() + currentPostNumber * postIntervalMinutes * 60 * 1000
+    );
+
+    // 이미 지난 시간이면 즉시 실행 (catch-up)
+    // 단, 너무 과거면 현재 시간 + 10초 (폭주 방지)
+    if (nextTime <= now) {
+      return new Date(now.getTime() + 10 * 1000);
+    }
+
+    return nextTime;
   }
 
   /**
@@ -807,16 +907,21 @@ export class ScheduleRunner {
   }
 
   /**
-   * 즉시 실행용: N개 Job 한번에 생성 (BullMQ delay 사용)
+   * @deprecated JIT 방식으로 변경됨. createSingleJob()을 사용하세요.
    * 
-   * 스케줄 자동 실행은 1개씩 생성하지만,
-   * 즉시 실행(runNow 버튼)은 기존처럼 한번에 N개 생성하여 즉각적인 피드백 제공
+   * 즉시 실행도 이제 첫 Job만 즉시 생성하고, 나머지는 Cron이 생성합니다.
+   * 이 메서드는 호환성을 위해 유지되지만, 새 코드에서는 사용하지 마세요.
+   * 
+   * 대량 백필이 필요한 경우 별도 관리자 API로 분리 예정입니다.
    */
   async createJobsForRun(
     schedule: any,
     run: any,
     _sessionStatus: SessionStatus | null,
   ) {
+    this.logger.warn(
+      `[DEPRECATED] createJobsForRun 호출됨. JIT 방식(createSingleJob) 사용을 권장합니다.`
+    );
     const jobs = [];
     const runMode = this.determineRunMode(schedule);
     const now = new Date();

@@ -1,6 +1,8 @@
 /**
  * Schedule 서비스
  * 스케줄 비즈니스 로직
+ * 
+ * [JIT 개선] 비활성화 시 pending Job 취소 로직 추가
  */
 
 import {
@@ -8,6 +10,9 @@ import {
   NotFoundException,
   ForbiddenException,
   BadRequestException,
+  Logger,
+  Inject,
+  forwardRef,
 } from '@nestjs/common';
 import { PrismaService } from '@/common/prisma/prisma.service';
 import { CreateScheduleDto } from './dto/create-schedule.dto';
@@ -18,10 +23,17 @@ import {
   createPaginationMeta,
 } from '@/common/dto/pagination.dto';
 import { Schedule, ScheduleStatus } from '@prisma/client';
+import { JobService } from '../job/job.service';
 
 @Injectable()
 export class ScheduleService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(ScheduleService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => JobService))
+    private readonly jobService: JobService,
+  ) {}
 
   /**
    * 스케줄 목록 조회 (페이지네이션)
@@ -242,7 +254,10 @@ export class ScheduleService {
 
   /**
    * 사용자 활성화 토글 (userEnabled)
-   * [변경됨] 활성화 시 nextPostAt 초기화
+   * 
+   * [JIT 개선]
+   * - 활성화 시: nextPostAt 초기화
+   * - 비활성화 시: nextPostAt=null + pending Job 취소
    */
   async toggleUserEnabled(id: string, userId: string, enabled: boolean) {
     // 소유권 확인
@@ -267,6 +282,17 @@ export class ScheduleService {
       // 하루가 바뀌었으면 카운터 초기화
       if (!schedule.lastRunDate || schedule.lastRunDate < todayStart) {
         todayPostedCount = 0;
+      }
+    } else {
+      // [JIT 개선] 비활성화 시 pending Job 취소
+      try {
+        const cancelledCount = await this.jobService.cancelPendingJobsBySchedule(id);
+        if (cancelledCount > 0) {
+          this.logger.log(`스케줄 ${id} 비활성화: ${cancelledCount}개 pending Job 취소됨`);
+        }
+      } catch (error) {
+        this.logger.warn(`스케줄 ${id} pending Job 취소 실패: ${error}`);
+        // 취소 실패해도 비활성화는 계속 진행
       }
     }
 

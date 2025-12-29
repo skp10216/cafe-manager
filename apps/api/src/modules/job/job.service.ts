@@ -29,6 +29,12 @@ interface CreateJobInput {
     sequenceNumber?: number;
     delay?: number;
     runMode?: 'HEADLESS' | 'DEBUG';
+    /** 
+     * 결정적 Job ID (중복 방지용)
+     * 형식: {scheduleRunId}:{sequenceNumber}
+     * 같은 ID로 재요청 시 기존 Job 반환 (중복 생성 방지)
+     */
+    deterministicId?: string;
 }
 
 const DEFAULT_JOB_MAX_ATTEMPTS = 3; // core에 정의한 값과 맞춰주면 됨
@@ -298,12 +304,35 @@ export class JobService {
 
     /**
      * 새 작업 생성 및 큐에 추가
+     * 
+     * [JIT 개선] deterministicId 지원
+     * - 같은 deterministicId로 요청 시 기존 Job 반환 (중복 방지)
+     * - BullMQ도 같은 jobId는 중복 추가 불가
      */
     async createJob(input: CreateJobInput): Promise<Job> {
         this.logger.log(
             `createJob 시작: type=${input.type}, userId=${input.userId}` +
-            (input.scheduleRunId ? `, scheduleRunId=${input.scheduleRunId}` : '')
+            (input.scheduleRunId ? `, scheduleRunId=${input.scheduleRunId}` : '') +
+            (input.deterministicId ? `, deterministicId=${input.deterministicId}` : '')
         );
+
+        // [중복 방지] deterministicId가 있으면 기존 Job 확인
+        if (input.deterministicId && input.scheduleRunId && input.sequenceNumber) {
+            const existingJob = await this.prisma.job.findFirst({
+                where: {
+                    scheduleRunId: input.scheduleRunId,
+                    sequenceNumber: input.sequenceNumber,
+                },
+            });
+
+            if (existingJob) {
+                this.logger.warn(
+                    `중복 Job 요청 감지: scheduleRunId=${input.scheduleRunId}, seq=${input.sequenceNumber}, ` +
+                    `기존 jobId=${existingJob.id}, status=${existingJob.status}`
+                );
+                return existingJob;
+            }
+        }
 
         // 1) DB에 작업 레코드 생성
         const job = await this.prisma.job.create({
@@ -324,16 +353,19 @@ export class JobService {
             (job.sequenceNumber ? `, seq=${job.sequenceNumber}` : '')
         );
 
-        // 2) BullMQ 큐에 작업 추가 (delay 포함)
+        // 2) BullMQ 큐에 작업 추가
+        // - dbJobId: DB Job ID (Worker가 DB 조회에 사용)
+        // - bullmqJobId: 결정적 ID (중복 방지용, 옵셔널)
         try {
             await this.jobProducer.addJob(
-                job.id,
+                job.id,                    // DB Job ID
                 input.type,
                 input.payload,
-                input.delay  // delay 추가
+                input.delay,               // delay
+                input.deterministicId      // BullMQ 중복 방지용 ID (옵셔널)
             );
             this.logger.log(
-                `BullMQ 큐 추가 성공: jobId=${job.id}, type=${job.type}` +
+                `BullMQ 큐 추가 성공: jobId=${job.id}, bullmqId=${input.deterministicId || job.id}, type=${job.type}` +
                 (input.delay ? `, delay=${input.delay}ms` : '')
             );
         } catch (error) {
@@ -580,6 +612,68 @@ export class JobService {
             deletedCount: 1,
             message: '작업이 삭제되었습니다',
         };
+    }
+
+    // ========================================
+    // 스케줄 취소 관련 메서드
+    // ========================================
+
+    /**
+     * 특정 스케줄의 대기 중인 Job들을 취소
+     * 스케줄 비활성화 시 호출하여 pending Job 정리
+     * 
+     * @param scheduleId 스케줄 ID
+     * @returns 취소된 Job 수
+     */
+    async cancelPendingJobsBySchedule(scheduleId: string): Promise<number> {
+        // 1. DB에서 해당 스케줄의 PENDING 상태 Job 조회
+        const pendingJobs = await this.prisma.job.findMany({
+            where: {
+                status: 'PENDING',
+                payload: {
+                    path: ['scheduleId'],
+                    equals: scheduleId,
+                },
+            },
+            select: { id: true },
+        });
+
+        if (pendingJobs.length === 0) {
+            this.logger.debug(`스케줄 ${scheduleId}: 취소할 pending Job 없음`);
+            return 0;
+        }
+
+        const jobIds = pendingJobs.map(j => j.id);
+        this.logger.log(`스케줄 ${scheduleId}: ${jobIds.length}개 pending Job 취소 시작`);
+
+        let cancelledCount = 0;
+
+        for (const jobId of jobIds) {
+            try {
+                // BullMQ에서 제거 시도
+                const removed = await this.jobProducer.removeJob(jobId);
+                
+                // DB 상태를 CANCELLED로 변경
+                await this.prisma.job.update({
+                    where: { id: jobId },
+                    data: {
+                        status: 'CANCELLED',
+                        errorMessage: '스케줄 비활성화로 취소됨',
+                        finishedAt: new Date(),
+                    },
+                });
+
+                cancelledCount++;
+                this.logger.debug(
+                    `Job ${jobId} 취소 완료 (BullMQ 제거: ${removed ? '성공' : '이미 처리됨'})`
+                );
+            } catch (error) {
+                this.logger.warn(`Job ${jobId} 취소 실패: ${error}`);
+            }
+        }
+
+        this.logger.log(`스케줄 ${scheduleId}: ${cancelledCount}개 Job 취소 완료`);
+        return cancelledCount;
     }
 }
 

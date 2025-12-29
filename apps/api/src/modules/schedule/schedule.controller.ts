@@ -121,8 +121,12 @@ export class ScheduleController {
   }
 
   /**
-   * 스케줄 즉시 실행
+   * 스케줄 즉시 실행 (JIT 방식)
    * POST /api/schedules/:id/run-now
+   * 
+   * [JIT 개선] 첫 Job만 즉시 생성, 나머지는 Cron이 순차 생성
+   * - 모니터링 명확화: 대기 Job이 0~1개로 유지
+   * - 취소/수정 용이: nextPostAt만 조정하면 됨
    */
   @Post(':id/run-now')
   async runNow(@CurrentUser() user: RequestUser, @Param('id') id: string) {
@@ -130,7 +134,7 @@ export class ScheduleController {
     await this.scheduleService.findOne(id, user.userId);
 
     const now = new Date();
-    const today = now.toISOString().slice(0, 10); // "2025-12-24"
+    const today = now.toISOString().slice(0, 10); // "2025-12-26"
 
     // 2. 템플릿 정보 포함하여 다시 조회
     const fullSchedule = await this.prisma.schedule.findUnique({
@@ -144,6 +148,21 @@ export class ScheduleController {
             },
           },
         },
+        user: {
+          include: {
+            naverAccounts: {
+              include: {
+                sessions: {
+                  where: {
+                    status: { in: ['HEALTHY', 'EXPIRING', 'PENDING'] },
+                  },
+                  orderBy: { lastVerifiedAt: 'desc' },
+                  take: 1,
+                },
+              },
+            },
+          },
+        },
       },
     });
 
@@ -151,21 +170,74 @@ export class ScheduleController {
       throw new BadRequestException('스케줄을 찾을 수 없습니다');
     }
 
-    // 3. ScheduleRun 생성 (중복 방지는 createOrSkip에서 처리)
-    const run = await this.scheduleRunService.createOrSkip({
-      scheduleId: id,
-      userId: user.userId,
-      runDate: new Date(today),
-    });
+    // 3. ScheduleRun 생성/조회
+    let run = await this.scheduleRunService.findByScheduleAndDate(
+      id,
+      new Date(today),
+    );
 
     if (!run) {
-      throw new BadRequestException('오늘은 이미 실행되었습니다');
+      run = await this.scheduleRunService.createOrSkip({
+        scheduleId: id,
+        userId: user.userId,
+        runDate: new Date(today),
+      });
     }
 
-    // 4. N개 Job 생성 (즉시 실행은 sessionStatus=null)
-    await this.scheduleRunner.createJobsForRun(fullSchedule, run, null);
+    if (!run) {
+      throw new BadRequestException('ScheduleRun 생성 실패');
+    }
 
-    return { success: true, runId: run.id };
+    // totalJobs 미리 설정 (N회 목표 명시)
+    await this.scheduleRunService.update(run.id, {
+      totalJobs: fullSchedule.dailyPostCount,
+      status: 'RUNNING',
+    });
+
+    // 4. [핵심] nextPostAt이 null이거나 미래인 경우 현재 시각으로 설정
+    //    createSingleJob의 조건부 업데이트(nextPostAt <= now)를 통과하기 위함
+    if (!fullSchedule.nextPostAt || fullSchedule.nextPostAt > now) {
+      // 하루가 바뀌었는지 확인 (todayPostedCount 리셋 필요 여부)
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      const shouldResetCount = !fullSchedule.lastRunDate || fullSchedule.lastRunDate < todayStart;
+
+      await this.prisma.schedule.update({
+        where: { id },
+        data: { 
+          nextPostAt: now,
+          todayPostedCount: shouldResetCount ? 0 : undefined,
+        },
+      });
+      
+      // fullSchedule 객체도 업데이트 (createSingleJob에서 참조)
+      (fullSchedule as any).nextPostAt = now;
+      if (shouldResetCount) {
+        (fullSchedule as any).todayPostedCount = 0;
+      }
+    }
+
+    // 5. [JIT] 첫 번째 Job만 즉시 생성
+    const job = await this.scheduleRunner.createSingleJob(
+      fullSchedule,
+      run,
+      null,
+      now,
+    );
+
+    if (!job) {
+      // 이미 목표 달성 또는 조건 미충족
+      throw new BadRequestException(
+        '오늘 목표를 이미 달성했거나 스케줄이 비활성화 상태입니다'
+      );
+    }
+
+    return {
+      success: true,
+      runId: run.id,
+      jobId: job.id,
+      message: `첫 번째 포스팅 Job 생성 완료. 나머지 ${fullSchedule.dailyPostCount - 1}개는 ${fullSchedule.postIntervalMinutes}분 간격으로 자동 생성됩니다.`,
+    };
   }
 }
 
