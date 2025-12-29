@@ -27,6 +27,7 @@ import { ArrowBack, ExpandMore, ExpandLess, OpenInNew } from '@mui/icons-materia
 import AppButton from '@/components/common/AppButton';
 import StatusChip from '@/components/common/StatusChip';
 import { scheduleRunApi, scheduleApi, ScheduleRun, Job, Schedule } from '@/lib/api-client';
+import { toWorkerErrorGuide } from '@/lib/worker-error';
 
 export default function ScheduleHistoryPage() {
   const router = useRouter();
@@ -210,6 +211,16 @@ export default function ScheduleHistoryPage() {
                           .sort((a, b) => (a.sequenceNumber || 0) - (b.sequenceNumber || 0))
                           .map((job) => {
                             const articleUrl = getArticleUrl(job.payload);
+                            const jobErrorGuide = toWorkerErrorGuide(
+                              job.errorMessage,
+                              (job as Job)?.errorCode || undefined,
+                              job.type === 'VERIFY_SESSION' || job.type === 'INIT_SESSION' ? job.type : 'JOB'
+                            );
+                            const jobErrorText =
+                              jobErrorGuide?.headline ||
+                              jobErrorGuide?.description ||
+                              job.errorMessage ||
+                              '알 수 없는 오류';
 
                             return (
                               <ListItem
@@ -247,7 +258,7 @@ export default function ScheduleHistoryPage() {
                                       )}
                                       {job.status === 'FAILED' && (
                                         <Typography variant="caption" color="error">
-                                          {job.errorMessage || '알 수 없는 오류'}
+                                          {jobErrorText}
                                         </Typography>
                                       )}
                                       {job.status === 'PROCESSING' && (

@@ -29,6 +29,11 @@ import {
   Divider,
   alpha,
   CircularProgress,
+  Alert,
+  Stack,
+  List,
+  ListItem,
+  ListItemText,
 } from '@mui/material';
 import {
   Refresh,
@@ -41,6 +46,7 @@ import {
   Schedule,
   PlayArrow,
 } from '@mui/icons-material';
+import { mapWorkerErrorToGuide } from '@cafe-manager/core';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001/api';
 const QUEUE_NAME = 'cafe-jobs';
@@ -114,6 +120,17 @@ export default function JobsTab() {
   const [selectedJob, setSelectedJob] = useState<JobDetail | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const selectedJobGuide = selectedJob
+    ? mapWorkerErrorToGuide({
+        errorMessage: selectedJob.failedReason,
+        context:
+          selectedJob.name === 'INIT_SESSION' || selectedJob.name === 'VERIFY_SESSION'
+            ? selectedJob.name
+            : 'JOB',
+      })
+    : null;
+  const selectedJobFriendlyMessage =
+    selectedJobGuide?.headline || selectedJobGuide?.description || selectedJob?.failedReason || null;
 
   const fetchJobs = useCallback(async () => {
     try {
@@ -456,6 +473,49 @@ export default function JobsTab() {
               </Typography>
             </Box>
 
+            {/* INIT_SESSION 안내 */}
+            {selectedJob.name === 'INIT_SESSION' && (
+              <Card
+                variant="outlined"
+                sx={{ mb: 3, borderColor: 'divider', bgcolor: 'background.paper' }}
+              >
+                <Box sx={{ p: 2 }}>
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                    네이버 계정 추가 플로우 안내
+                  </Typography>
+                  <List dense sx={{ mb: 1 }}>
+                    <ListItem disablePadding>
+                      <ListItemText
+                        primary="1) 계정 저장 (≈3초)"
+                        secondary="입력된 아이디/비밀번호를 암호화하여 저장합니다."
+                        primaryTypographyProps={{ variant: 'body2' }}
+                        secondaryTypographyProps={{ variant: 'caption' }}
+                      />
+                    </ListItem>
+                    <ListItem disablePadding>
+                      <ListItemText
+                        primary="2) 쿠키/세션 생성 (≈40초)"
+                        secondary="브라우저 프로필을 생성하고 자동 로그인하며 쿠키를 보관합니다."
+                        primaryTypographyProps={{ variant: 'body2' }}
+                        secondaryTypographyProps={{ variant: 'caption' }}
+                      />
+                    </ListItem>
+                    <ListItem disablePadding>
+                      <ListItemText
+                        primary="3) 인증 확인 (≈20초)"
+                        secondary="OTP/2FA 또는 CAPTCHA가 필요하면 워커 로그로 안내합니다."
+                        primaryTypographyProps={{ variant: 'body2' }}
+                        secondaryTypographyProps={{ variant: 'caption' }}
+                      />
+                    </ListItem>
+                  </List>
+                  <Typography variant="caption" color="text.secondary">
+                    ▪ OTP/보안 코드가 필요하면 사용자에게 직접 인증을 요청하고, 인증 완료 후 재시도하세요.
+                  </Typography>
+                </Box>
+              </Card>
+            )}
+
             <Divider sx={{ mb: 3 }} />
 
             {/* Timestamps */}
@@ -478,31 +538,50 @@ export default function JobsTab() {
             </Box>
 
             {/* Error */}
-            {selectedJob.failedReason && (
+            {selectedJobFriendlyMessage && (
               <>
                 <Divider sx={{ mb: 3 }} />
                 <Typography variant="subtitle2" color="error.main" sx={{ mb: 1 }}>
-                  에러 메시지
+                  실패 원인
                 </Typography>
-                <Box
-                  sx={{
-                    p: 2,
-                    bgcolor: (theme) => alpha(theme.palette.error.main, 0.1),
-                    borderRadius: 1,
-                    mb: 3,
-                    overflow: 'auto',
-                    maxHeight: 200,
-                  }}
+                <Alert
+                  severity={selectedJobGuide?.severity === 'info' ? 'info' : 'warning'}
+                  sx={{ mb: 2 }}
                 >
-                  <Typography
-                    variant="body2"
-                    fontFamily="monospace"
-                    fontSize="0.8rem"
-                    sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}
-                  >
-                    {selectedJob.failedReason}
+                  <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>
+                    {selectedJobFriendlyMessage}
                   </Typography>
-                </Box>
+                  {selectedJobGuide?.description && (
+                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                      {selectedJobGuide.description}
+                    </Typography>
+                  )}
+                  {selectedJobGuide?.hints && (
+                    <Stack direction="row" spacing={0.5} flexWrap="wrap">
+                      {selectedJobGuide.hints.map((hint) => (
+                        <Chip key={hint} size="small" label={hint} />
+                      ))}
+                    </Stack>
+                  )}
+                  <Box sx={{ display: 'flex', gap: 1, mt: 1, flexWrap: 'wrap' }}>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      startIcon={<Replay />}
+                      onClick={() => executeAction(selectedJob.id, 'retry')}
+                      disabled={!!actionLoading}
+                    >
+                      재시도
+                    </Button>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => window.open('https://nid.naver.com/nidlogin.login', '_blank')}
+                    >
+                      직접 인증
+                    </Button>
+                  </Box>
+                </Alert>
               </>
             )}
 
@@ -594,4 +673,3 @@ export default function JobsTab() {
     </Box>
   );
 }
-
