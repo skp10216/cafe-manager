@@ -45,6 +45,9 @@ import { OnboardingStatus } from '@/components/dashboard/OnboardingChecklist';
 // 토스트
 import { useToast } from '@/components/common/ToastProvider';
 
+// 세션 상태 유틸리티 (SSOT)
+import { isIntegrationOK } from '@/lib/session-status';
+
 /** 대시보드 데이터 상태 */
 interface DashboardData {
   integrationStatus: IntegrationStatusResponse | null;
@@ -141,7 +144,8 @@ export default function DashboardPage() {
       : null;
     const hasTemplates = templatesRes.status === 'fulfilled' && templatesRes.value.meta.total > 0;
     const hasSchedules = schedulesRes.status === 'fulfilled' && schedulesRes.value.meta.total > 0;
-    const naverConnected = integrationData?.status === 'OK' || integrationData?.status === 'WARNING';
+    // SSOT: isIntegrationOK 사용하여 연동 상태 판단
+    const naverConnected = isIntegrationOK(integrationData?.status);
     const sessionStatus = integrationData?.session?.status as OnboardingStatus['sessionStatus'] ?? null;
 
     // 결과 처리

@@ -50,6 +50,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog';
 import { scheduleApi, dashboardApi, Schedule as ScheduleType } from '@/lib/api-client';
 import { useToast } from '@/components/common/ToastProvider';
 import FailureHistoryDialog from '@/components/common/FailureHistoryDialog';
+import { isIntegrationOK } from '@/lib/session-status';
 
 /** 실행 설정 미리보기 컴포넌트 */
 function ExecutionPreview({
@@ -273,13 +274,12 @@ export default function SchedulesPage() {
     }
   };
 
-  // 세션 상태 로드
+  // 세션 상태 로드 (SSOT: isIntegrationOK 사용)
   const loadSessionStatus = async () => {
     try {
       const integrationStatus = await dashboardApi.getIntegrationStatus();
-      const status = integrationStatus.session?.status;
-      // ACTIVE면 실행 가능
-      setSessionHealthy(status === 'ACTIVE');
+      // SSOT: 연동 상태가 OK 또는 WARNING이면 실행 가능
+      setSessionHealthy(isIntegrationOK(integrationStatus.status));
     } catch (error) {
       console.error('세션 상태 로딩 실패:', error);
       setSessionHealthy(false);
@@ -448,6 +448,7 @@ export default function SchedulesPage() {
     return calculateNextRun(schedule);
   };
 
+  /** 실행 현황 렌더링 (컴팩트 버전) */
   const renderExecutionTimeline = (row: ScheduleType) => {
     const nextRun = getNextRunInfo(row);
     const lastStatus = row.lastRunStatus;
@@ -456,67 +457,48 @@ export default function SchedulesPage() {
     const weeklyCount = row.weeklyRunCount ?? 0;
 
     return (
-      <Box
-        sx={{
-          p: 1.5,
-          borderRadius: 2,
-          border: '1px dashed',
-          borderColor: (theme) => alpha(theme.palette.primary.main, 0.2),
-          bgcolor: (theme) => alpha(theme.palette.primary.main, 0.03),
-        }}
-      >
-        <Stack spacing={1.25}>
-          <Stack direction="row" alignItems="center" spacing={1}>
-            <AccessTime sx={{ fontSize: 16, color: nextRun.isActive ? 'primary.main' : 'text.disabled' }} />
-            <Box>
-              <Typography
-                variant="body2"
-                sx={{ fontWeight: 700, color: nextRun.isActive ? 'primary.main' : 'text.disabled' }}
-              >
-                다음 실행 · {nextRun.text}
+      <Stack spacing={0.5}>
+        {/* 다음 실행 */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          <AccessTime sx={{ fontSize: 14, color: nextRun.isActive ? 'primary.main' : 'text.disabled' }} />
+          <Typography
+            variant="body2"
+            sx={{ 
+              fontWeight: 600, 
+              color: nextRun.isActive ? 'primary.main' : 'text.disabled',
+              fontSize: '0.8125rem',
+            }}
+          >
+            {nextRun.text}
+            {nextRun.subText && (
+              <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 0.5 }}>
+                ({nextRun.subText})
               </Typography>
-              {nextRun.subText && (
-                <Typography variant="caption" color="text.secondary">
-                  {nextRun.subText}
-                </Typography>
-              )}
-            </Box>
-          </Stack>
+            )}
+          </Typography>
+        </Box>
 
-          <Stack direction="row" alignItems="center" spacing={1}>
-            {lastStatus === 'SUCCESS' && <CheckCircle sx={{ fontSize: 16, color: 'success.main' }} />}
-            {lastStatus === 'FAILED' && <Error sx={{ fontSize: 16, color: 'error.main' }} />}
-            {!lastStatus && <Timeline sx={{ fontSize: 16, color: 'text.disabled' }} />}
-            <Box>
-              <Typography variant="body2" sx={{ fontWeight: 700, color: lastStatus === 'FAILED' ? 'error.main' : 'text.primary' }}>
-                최근 실행 · {lastStatus === 'SUCCESS' ? '성공' : lastStatus === 'FAILED' ? '실패' : '기록 없음'}
-              </Typography>
-              <Typography variant="caption" color="text.secondary">
-                {formatRelativeTime(lastRunText) || '-'}
-              </Typography>
-            </Box>
-          </Stack>
+        {/* 최근 실행 */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75 }}>
+          {lastStatus === 'SUCCESS' && <CheckCircle sx={{ fontSize: 14, color: 'success.main' }} />}
+          {lastStatus === 'FAILED' && <Error sx={{ fontSize: 14, color: 'error.main' }} />}
+          {!lastStatus && <Timeline sx={{ fontSize: 14, color: 'text.disabled' }} />}
+          <Typography
+            variant="caption"
+            sx={{ 
+              color: lastStatus === 'FAILED' ? 'error.main' : 'text.secondary',
+            }}
+          >
+            {lastStatus === 'SUCCESS' ? '성공' : lastStatus === 'FAILED' ? '실패' : '기록없음'}
+            {lastRunText && ` · ${formatRelativeTime(lastRunText)}`}
+          </Typography>
+        </Box>
 
-          <Divider sx={{ my: 0.5 }} />
-
-          <Stack direction="row" spacing={1} flexWrap="wrap">
-            <Chip
-              size="small"
-              icon={<Bolt sx={{ fontSize: 16 }} />}
-              label={`일일 실행 ${dailyCount}회`}
-              sx={{ fontWeight: 700 }}
-            />
-            <Chip
-              size="small"
-              icon={<CalendarMonth sx={{ fontSize: 16 }} />}
-              label={`주간 실행 ${weeklyCount}회`}
-              color="primary"
-              variant="outlined"
-              sx={{ fontWeight: 700 }}
-            />
-          </Stack>
-        </Stack>
-      </Box>
+        {/* 실행 통계 (간결하게) */}
+        <Typography variant="caption" color="text.disabled" sx={{ fontSize: '0.7rem' }}>
+          오늘 {dailyCount}회 · 이번주 {weeklyCount}회
+        </Typography>
+      </Stack>
     );
   };
 
@@ -637,7 +619,7 @@ export default function SchedulesPage() {
     {
       id: 'nextRun',
       label: '실행 현황',
-      minWidth: 260,
+      minWidth: 180,
       render: (row: ScheduleType) => renderExecutionTimeline(row),
     },
     {

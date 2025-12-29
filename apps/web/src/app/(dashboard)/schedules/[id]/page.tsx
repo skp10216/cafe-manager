@@ -42,6 +42,7 @@ import {
   PlayCircle,
   History,
   WarningAmber,
+  Error as ErrorIcon,
 } from '@mui/icons-material';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -51,7 +52,8 @@ import AppCard from '@/components/common/AppCard';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import FailureHistoryDialog from '@/components/common/FailureHistoryDialog';
 import { useToast } from '@/components/common/ToastProvider';
-import { dashboardApi, scheduleApi, templateApi, Template, ApiError, Schedule } from '@/lib/api-client';
+import { dashboardApi, scheduleApi, templateApi, Template, ApiError, Schedule as ScheduleType } from '@/lib/api-client';
+import { isIntegrationOK } from '@/lib/session-status';
 
 const scheduleSchema = z.object({
   name: z.string().min(1, '스케줄 이름을 입력하세요'),
@@ -83,14 +85,14 @@ export default function ScheduleDetailPage() {
   const isNew = id === 'new';
   const toast = useToast();
 
-  const [scheduleMeta, setScheduleMeta] = useState<Schedule | null>(null);
+  const [scheduleMeta, setScheduleMeta] = useState<ScheduleType | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templateLoading, setTemplateLoading] = useState(true);
   const [saveLoading, setSaveLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionTarget, setActionTarget] = useState<{
     type: 'pause' | 'resume' | 'run';
-    schedule: Schedule;
+    schedule: ScheduleType;
   } | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [failureOpen, setFailureOpen] = useState(false);
@@ -155,11 +157,12 @@ export default function ScheduleDetailPage() {
     }
   };
 
+  // 세션 상태 로드 (SSOT: isIntegrationOK 사용)
   const loadSessionStatus = async () => {
     try {
       const integrationStatus = await dashboardApi.getIntegrationStatus();
-      const status = integrationStatus.session?.status;
-      setSessionHealthy(status === 'ACTIVE');
+      // SSOT: 연동 상태가 OK 또는 WARNING이면 실행 가능
+      setSessionHealthy(isIntegrationOK(integrationStatus.status));
     } catch (err) {
       console.error('세션 상태 확인 실패:', err);
       setSessionHealthy(false);
@@ -183,7 +186,7 @@ export default function ScheduleDetailPage() {
     }
   };
 
-  const validateRunPrerequisites = (schedule: Schedule) => {
+  const validateRunPrerequisites = (schedule: ScheduleType) => {
     if (!schedule.userEnabled) {
       return '스케줄이 비활성화되어 있습니다. 먼저 활성화해주세요.';
     }
@@ -196,7 +199,7 @@ export default function ScheduleDetailPage() {
     return null;
   };
 
-  const performToggle = async (schedule: Schedule, newEnabled: boolean) => {
+  const performToggle = async (schedule: ScheduleType, newEnabled: boolean) => {
     if (schedule.adminStatus !== 'APPROVED') {
       toast.warning('관리자 승인이 필요합니다.');
       return;
@@ -211,7 +214,7 @@ export default function ScheduleDetailPage() {
     }
   };
 
-  const performRunNow = async (schedule: Schedule) => {
+  const performRunNow = async (schedule: ScheduleType) => {
     const validation = validateRunPrerequisites(schedule);
     if (validation) {
       toast.warning(validation);
@@ -400,7 +403,7 @@ export default function ScheduleDetailPage() {
         templateId: data.templateId,
         dailyPostCount: data.dailyPostCount,
         postIntervalMinutes: data.postIntervalMinutes,
-        scheduleType: data.scheduleType === 'immediate' ? 'IMMEDIATE' : 'SCHEDULED',
+        scheduleType: (data.scheduleType === 'immediate' ? 'IMMEDIATE' : 'SCHEDULED') as 'IMMEDIATE' | 'SCHEDULED',
         runTime: data.scheduleType === 'scheduled' ? data.runTime : '00:00',
       };
 
@@ -524,7 +527,7 @@ export default function ScheduleDetailPage() {
 
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   {scheduleMeta.lastRunStatus === 'SUCCESS' && <CheckCircle sx={{ fontSize: 18, color: 'success.main' }} />}
-                  {scheduleMeta.lastRunStatus === 'FAILED' && <Error sx={{ fontSize: 18, color: 'error.main' }} />}
+                  {scheduleMeta.lastRunStatus === 'FAILED' && <ErrorIcon sx={{ fontSize: 18, color: 'error.main' }} />}
                   {!scheduleMeta.lastRunStatus && <Info sx={{ fontSize: 18, color: 'text.disabled' }} />}
                   <Box>
                     <Typography variant="body1" sx={{ fontWeight: 700 }}>

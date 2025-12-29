@@ -715,11 +715,16 @@ export class ScheduleRunner {
   }
 
   /**
-   * [고정 간격 정책] runTime 기준으로 다음 포스팅 시각 계산
+   * [고정 간격 정책] 다음 포스팅 시각 계산
    * 
-   * - 기준: 오늘 runTime + (postNumber * interval)
-   * - 이미 지난 시간이면 즉시 실행 (catch-up)
-   * - 마지막 포스팅이면 다음 날 runTime
+   * [버그 수정] runTime 기준 계산의 구조적 결함 해결
+   * - 기존: runTime + (n * interval) → runTime이 과거면 모든 시간이 과거로 계산되어 interval 무시됨
+   * - 변경: runTime이 과거면 현재 시간 기준으로 interval 적용
+   * 
+   * 동작 방식:
+   * 1. 마지막 포스팅 → 다음 날 runTime
+   * 2. runTime이 아직 안 옴 → runTime + (n * interval) [스케줄 모드]
+   * 3. runTime이 이미 지남 → now + interval [즉시 실행 모드]
    */
   private calculateNextPostAtFixed(
     runTime: string,
@@ -739,23 +744,24 @@ export class ScheduleRunner {
       return tomorrowRunTime;
     }
 
-    // 오늘 runTime 기준
-    const baseTime = new Date(todayStart);
-    baseTime.setHours(hours, minutes, 0, 0);
+    // 오늘 runTime 계산
+    const todayRunTime = new Date(todayStart);
+    todayRunTime.setHours(hours, minutes, 0, 0);
 
-    // 다음 포스팅 시각 = baseTime + (currentPostNumber * interval)
-    // currentPostNumber는 이번에 생성한 번호이므로, 다음은 currentPostNumber번째 간격 후
-    const nextTime = new Date(
-      baseTime.getTime() + currentPostNumber * postIntervalMinutes * 60 * 1000
-    );
-
-    // 이미 지난 시간이면 즉시 실행 (catch-up)
-    // 단, 너무 과거면 현재 시간 + 10초 (폭주 방지)
-    if (nextTime <= now) {
-      return new Date(now.getTime() + 10 * 1000);
+    // [핵심 수정] runTime이 아직 안 왔는지 / 이미 지났는지에 따라 분기
+    if (now < todayRunTime) {
+      // ✅ 케이스 1: runTime이 아직 안 옴 → runTime 기준으로 계산 (예약 스케줄 모드)
+      // 다음 포스팅 시각 = todayRunTime + (currentPostNumber * interval)
+      const nextTime = new Date(
+        todayRunTime.getTime() + currentPostNumber * postIntervalMinutes * 60 * 1000
+      );
+      return nextTime;
+    } else {
+      // ✅ 케이스 2: runTime이 이미 지남 → 현재 시간 기준으로 interval 적용 (즉시 실행 모드)
+      // [버그 수정] 기존에는 10초 후로 설정해서 interval이 무시되었음
+      // 이제 사용자가 설정한 postIntervalMinutes를 정확히 적용
+      return new Date(now.getTime() + postIntervalMinutes * 60 * 1000);
     }
-
-    return nextTime;
   }
 
   /**
