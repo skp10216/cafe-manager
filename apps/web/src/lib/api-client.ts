@@ -376,6 +376,20 @@ export interface Schedule {
   adminStatus?: 'APPROVED' | 'NEEDS_REVIEW' | 'SUSPENDED' | 'BLOCKED'; // 관리자 승인 상태
   adminReason?: string; // 관리자 중지/차단 사유
   lastRunDate: string | null; // 마지막 실행 날짜
+  lastRunStatus?: 'SUCCESS' | 'FAILED' | 'RUNNING' | 'PENDING';
+  lastRunFinishedAt?: string | null;
+  lastRunMessage?: string | null;
+  nextRunAt?: string | null;
+  dailyRunCount?: number;
+  weeklyRunCount?: number;
+  queueDelayedMinutes?: number | null;
+  limitExceeded?: boolean;
+  recentFailures?: Array<{
+    id: string;
+    runDate: string;
+    failedJobs: number;
+    message?: string | null;
+  }>;
   createdAt: string;
   updatedAt: string;
   template?: {

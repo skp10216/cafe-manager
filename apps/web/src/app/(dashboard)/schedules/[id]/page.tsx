@@ -22,6 +22,7 @@ import {
   alpha,
   Chip,
   Skeleton,
+  Stack,
 } from '@mui/material';
 import {
   Save,
@@ -37,12 +38,20 @@ import {
   Bolt,
   CalendarMonth,
   NavigateNext,
+  PauseCircle,
+  PlayCircle,
+  History,
+  WarningAmber,
 } from '@mui/icons-material';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
 import AppButton from '@/components/common/AppButton';
-import { scheduleApi, templateApi, Template, ApiError } from '@/lib/api-client';
+import AppCard from '@/components/common/AppCard';
+import ConfirmDialog from '@/components/common/ConfirmDialog';
+import FailureHistoryDialog from '@/components/common/FailureHistoryDialog';
+import { useToast } from '@/components/common/ToastProvider';
+import { dashboardApi, scheduleApi, templateApi, Template, ApiError, Schedule } from '@/lib/api-client';
 
 const scheduleSchema = z.object({
   name: z.string().min(1, '스케줄 이름을 입력하세요'),
@@ -72,11 +81,20 @@ export default function ScheduleDetailPage() {
   const params = useParams();
   const id = params.id as string;
   const isNew = id === 'new';
+  const toast = useToast();
 
+  const [scheduleMeta, setScheduleMeta] = useState<Schedule | null>(null);
   const [templates, setTemplates] = useState<Template[]>([]);
   const [templateLoading, setTemplateLoading] = useState(true);
   const [saveLoading, setSaveLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [actionTarget, setActionTarget] = useState<{
+    type: 'pause' | 'resume' | 'run';
+    schedule: Schedule;
+  } | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [failureOpen, setFailureOpen] = useState(false);
+  const [sessionHealthy, setSessionHealthy] = useState(true);
 
   const {
     register,
@@ -122,6 +140,7 @@ export default function ScheduleDetailPage() {
     if (!isNew) {
       loadSchedule();
     }
+    loadSessionStatus();
   }, [id]);
 
   const loadTemplates = async () => {
@@ -136,9 +155,21 @@ export default function ScheduleDetailPage() {
     }
   };
 
+  const loadSessionStatus = async () => {
+    try {
+      const integrationStatus = await dashboardApi.getIntegrationStatus();
+      const status = integrationStatus.session?.status;
+      setSessionHealthy(status === 'ACTIVE');
+    } catch (err) {
+      console.error('세션 상태 확인 실패:', err);
+      setSessionHealthy(false);
+    }
+  };
+
   const loadSchedule = async () => {
     try {
       const schedule = await scheduleApi.get(id);
+      setScheduleMeta(schedule);
       reset({
         name: schedule.name,
         templateId: schedule.templateId,
@@ -149,6 +180,70 @@ export default function ScheduleDetailPage() {
       });
     } catch (error) {
       setError('스케줄을 불러올 수 없습니다');
+    }
+  };
+
+  const validateRunPrerequisites = (schedule: Schedule) => {
+    if (!schedule.userEnabled) {
+      return '스케줄이 비활성화되어 있습니다. 먼저 활성화해주세요.';
+    }
+    if (schedule.adminStatus !== 'APPROVED') {
+      return '관리자 승인이 필요합니다.';
+    }
+    if (!sessionHealthy) {
+      return '네이버 연동이 필요합니다. 설정에서 연동 상태를 확인해주세요.';
+    }
+    return null;
+  };
+
+  const performToggle = async (schedule: Schedule, newEnabled: boolean) => {
+    if (schedule.adminStatus !== 'APPROVED') {
+      toast.warning('관리자 승인이 필요합니다.');
+      return;
+    }
+
+    try {
+      await scheduleApi.toggleEnabled(schedule.id, newEnabled);
+      toast.success(newEnabled ? '스케줄이 재개되었습니다.' : '스케줄이 일시정지되었습니다.');
+      await loadSchedule();
+    } catch (err) {
+      toast.error('상태 변경에 실패했습니다.');
+    }
+  };
+
+  const performRunNow = async (schedule: Schedule) => {
+    const validation = validateRunPrerequisites(schedule);
+    if (validation) {
+      toast.warning(validation);
+      return;
+    }
+
+    try {
+      await scheduleApi.runNow(schedule.id);
+      toast.success('즉시 실행을 요청했습니다.');
+      await loadSchedule();
+    } catch (err: any) {
+      if (err?.message?.includes('이미 실행되었습니다')) {
+        toast.info('오늘은 이미 실행되어 중복 실행되지 않았습니다.');
+      } else {
+        toast.error(`즉시 실행 실패: ${err?.message || '알 수 없는 오류'}`);
+      }
+    }
+  };
+
+  const handleActionConfirm = async () => {
+    if (!actionTarget) return;
+    setActionLoading(true);
+
+    try {
+      if (actionTarget.type === 'run') {
+        await performRunNow(actionTarget.schedule);
+      } else {
+        await performToggle(actionTarget.schedule, actionTarget.type === 'resume');
+      }
+    } finally {
+      setActionLoading(false);
+      setActionTarget(null);
     }
   };
 
@@ -216,6 +311,84 @@ export default function ScheduleDetailPage() {
     return `${minutes}분`;
   };
 
+  const formatRelativeTime = (dateStr?: string | null) => {
+    if (!dateStr) return null;
+    const date = new Date(dateStr);
+    const diffMs = date.getTime() - Date.now();
+    const diffMinutes = Math.round(Math.abs(diffMs) / (1000 * 60));
+    const diffHours = Math.round(Math.abs(diffMs) / (1000 * 60 * 60));
+
+    if (diffMinutes < 1) return '지금';
+    if (diffMinutes < 60) return diffMs >= 0 ? `${diffMinutes}분 후` : `${diffMinutes}분 전`;
+    if (diffHours < 24) return diffMs >= 0 ? `${diffHours}시간 후` : `${diffHours}시간 전`;
+    const diffDays = Math.round(diffHours / 24);
+    return diffMs >= 0 ? `${diffDays}일 후` : `${diffDays}일 전`;
+  };
+
+  const getNextRunInfo = () => {
+    if (!scheduleMeta) return null;
+    if (!scheduleMeta.userEnabled || scheduleMeta.adminStatus !== 'APPROVED' || !sessionHealthy) {
+      return { text: '-', isActive: false };
+    }
+
+    if (scheduleMeta.nextRunAt) {
+      const date = new Date(scheduleMeta.nextRunAt);
+      const timeText = date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+      const dayText = date.toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' });
+      return {
+        text: `${dayText} ${timeText}`,
+        subText: formatRelativeTime(scheduleMeta.nextRunAt) || undefined,
+        isActive: true,
+      };
+    }
+
+    // fallback 계산
+    try {
+      const now = new Date();
+      const [hours, minutes] = (scheduleMeta.runTime || '00:00').split(':').map(Number);
+      const nextRun = new Date();
+      nextRun.setHours(hours, minutes, 0, 0);
+      if (nextRun <= now) nextRun.setDate(nextRun.getDate() + 1);
+
+      const timeStr = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+      const diff = formatRelativeTime(nextRun.toISOString());
+      return {
+        text: `${nextRun.getDate() === now.getDate() ? '오늘' : '내일'} ${timeStr}`,
+        subText: diff || undefined,
+        isActive: true,
+      };
+    } catch {
+      return { text: '-', isActive: false };
+    }
+  };
+
+  const renderWarningBadges = () => {
+    if (!scheduleMeta) return null;
+    const badges = [];
+    if (scheduleMeta.limitExceeded) {
+      badges.push(
+        <Chip key="limit" size="small" color="error" label="한도 초과" sx={{ fontWeight: 700 }} />
+      );
+    }
+    if (scheduleMeta.queueDelayedMinutes) {
+      badges.push(
+        <Chip
+          key="queue"
+          size="small"
+          color="warning"
+          label={`대기열 지연 ${scheduleMeta.queueDelayedMinutes}분`}
+          sx={{ fontWeight: 700 }}
+        />
+      );
+    }
+    if (badges.length === 0) return null;
+    return (
+      <Stack direction="row" spacing={0.75} flexWrap="wrap">
+        {badges}
+      </Stack>
+    );
+  };
+
   const onSubmit = async (data: ScheduleForm) => {
     setError(null);
     setSaveLoading(true);
@@ -242,10 +415,10 @@ export default function ScheduleDetailPage() {
       if (data.scheduleType === 'immediate') {
         try {
           await scheduleApi.runNow(schedule.id);
-          alert('저장 완료 및 즉시 실행이 시작되었습니다!');
+          toast.success('저장 완료 및 즉시 실행이 시작되었습니다!');
         } catch (runError) {
           if (runError instanceof ApiError && runError.message.includes('이미 실행되었습니다')) {
-            alert('저장은 완료되었으나, 오늘은 이미 실행되어 중복 실행되지 않았습니다.');
+            toast.info('저장은 완료되었으나, 오늘은 이미 실행되어 중복 실행되지 않았습니다.');
           } else {
             throw runError;
           }
@@ -307,8 +480,137 @@ export default function ScheduleDetailPage() {
               자동 포스팅 스케줄을 설정하세요
             </Typography>
           </Box>
-        </Box>
       </Box>
+    </Box>
+
+      {!isNew && scheduleMeta && (
+        <AppCard sx={{ mb: 3, p: 0 }}>
+          <Box
+            sx={{
+              p: 3,
+              display: 'flex',
+              gap: 3,
+              flexWrap: 'wrap',
+              justifyContent: 'space-between',
+              alignItems: 'flex-start',
+            }}
+          >
+            <Stack spacing={1.25} sx={{ minWidth: { xs: '100%', sm: 320 }, flex: 1 }}>
+              <Typography variant="subtitle2" color="text.secondary" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                <Schedule fontSize="small" color="primary" />
+                실행 타임라인
+              </Typography>
+
+              <Stack spacing={1}>
+                {(() => {
+                  const next = getNextRunInfo();
+                  if (!next) return null;
+                  return (
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <AccessTime sx={{ fontSize: 18, color: next.isActive ? 'primary.main' : 'text.disabled' }} />
+                      <Box>
+                        <Typography variant="body1" sx={{ fontWeight: 700, color: next.isActive ? 'primary.main' : 'text.disabled' }}>
+                          다음 실행 · {next.text}
+                        </Typography>
+                        {next.subText && (
+                          <Typography variant="caption" color="text.secondary">
+                            {next.subText}
+                          </Typography>
+                        )}
+                      </Box>
+                    </Box>
+                  );
+                })()}
+
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  {scheduleMeta.lastRunStatus === 'SUCCESS' && <CheckCircle sx={{ fontSize: 18, color: 'success.main' }} />}
+                  {scheduleMeta.lastRunStatus === 'FAILED' && <Error sx={{ fontSize: 18, color: 'error.main' }} />}
+                  {!scheduleMeta.lastRunStatus && <Info sx={{ fontSize: 18, color: 'text.disabled' }} />}
+                  <Box>
+                    <Typography variant="body1" sx={{ fontWeight: 700 }}>
+                      최근 실행 · {scheduleMeta.lastRunStatus === 'SUCCESS' ? '성공' : scheduleMeta.lastRunStatus === 'FAILED' ? '실패' : '기록 없음'}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {formatRelativeTime(scheduleMeta.lastRunFinishedAt || scheduleMeta.lastRunDate) || '-'}
+                    </Typography>
+                  </Box>
+                </Box>
+
+                <Stack direction="row" spacing={1} flexWrap="wrap">
+                  <Chip
+                    size="small"
+                    icon={<Bolt sx={{ fontSize: 16 }} />}
+                    label={`일일 실행 ${scheduleMeta.dailyRunCount ?? 0}회`}
+                    sx={{ fontWeight: 700 }}
+                  />
+                  <Chip
+                    size="small"
+                    icon={<CalendarMonth sx={{ fontSize: 16 }} />}
+                    label={`주간 실행 ${scheduleMeta.weeklyRunCount ?? 0}회`}
+                    color="primary"
+                    variant="outlined"
+                    sx={{ fontWeight: 700 }}
+                  />
+                </Stack>
+              </Stack>
+            </Stack>
+
+            <Stack spacing={1.5} alignItems="flex-end" sx={{ minWidth: { xs: '100%', sm: 240 } }}>
+              {renderWarningBadges()}
+              <Stack direction="row" spacing={1}>
+                <AppButton
+                  size="small"
+                  variant={scheduleMeta.userEnabled ? 'outlined' : 'contained'}
+                  startIcon={scheduleMeta.userEnabled ? <PauseCircle /> : <PlayCircle />}
+                  disabled={actionLoading}
+                  onClick={() =>
+                    setActionTarget({
+                      type: scheduleMeta.userEnabled ? 'pause' : 'resume',
+                      schedule: scheduleMeta,
+                    })
+                  }
+                >
+                  {scheduleMeta.userEnabled ? '일시정지' : '재개'}
+                </AppButton>
+                <AppButton
+                  size="small"
+                  variant="contained"
+                  startIcon={<PlayArrow />}
+                  disabled={
+                    !scheduleMeta.userEnabled ||
+                    scheduleMeta.adminStatus !== 'APPROVED' ||
+                    !sessionHealthy ||
+                    actionLoading
+                  }
+                  onClick={() => setActionTarget({ type: 'run', schedule: scheduleMeta })}
+                >
+                  지금 실행
+                </AppButton>
+                <AppButton
+                  size="small"
+                  variant="text"
+                  startIcon={<History />}
+                  onClick={() => setFailureOpen(true)}
+                >
+                  실패 이력
+                </AppButton>
+              </Stack>
+            </Stack>
+          </Box>
+        </AppCard>
+      )}
+
+      {!isNew && scheduleMeta && (scheduleMeta.limitExceeded || scheduleMeta.queueDelayedMinutes) && (
+        <Alert
+          severity={scheduleMeta.limitExceeded ? 'error' : 'warning'}
+          icon={<WarningAmber />}
+          sx={{ mb: 3, borderRadius: 2 }}
+        >
+          {scheduleMeta.limitExceeded
+            ? '스케줄 호출 한도를 초과했습니다. 설정을 조정하거나 내일 다시 시도해주세요.'
+            : `최근 대기열이 지연되고 있습니다 (${scheduleMeta.queueDelayedMinutes}분). 실행 결과 반영까지 시간이 걸릴 수 있습니다.`}
+        </Alert>
+      )}
 
       {error && (
         <Alert severity="error" sx={{ mb: 3, borderRadius: 2 }}>
@@ -946,6 +1248,34 @@ export default function ScheduleDetailPage() {
           </AppButton>
         </Box>
       </form>
+
+      <ConfirmDialog
+        open={!!actionTarget}
+        title={
+          actionTarget?.type === 'run'
+            ? '스케줄을 지금 실행할까요?'
+            : actionTarget?.type === 'pause'
+              ? '스케줄을 일시정지할까요?'
+              : '스케줄을 다시 실행할까요?'
+        }
+        message={
+          actionTarget
+            ? `"${actionTarget.schedule.name}" 스케줄을 ${actionTarget.type === 'run' ? '즉시 실행' : actionTarget.type === 'pause' ? '일시정지' : '재개'}합니다.`
+            : ''
+        }
+        onConfirm={handleActionConfirm}
+        onCancel={() => setActionTarget(null)}
+        confirmText="확인"
+      />
+
+      {scheduleMeta && (
+        <FailureHistoryDialog
+          open={failureOpen}
+          scheduleId={scheduleMeta.id}
+          scheduleName={scheduleMeta.name}
+          onClose={() => setFailureOpen(false)}
+        />
+      )}
     </Box>
   );
 }

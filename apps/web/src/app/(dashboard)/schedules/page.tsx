@@ -21,6 +21,7 @@ import {
   alpha,
   Stack,
   Theme,
+  Divider,
 } from '@mui/material';
 import {
   Add,
@@ -28,24 +29,27 @@ import {
   Delete,
   MoreVert,
   PlayArrow,
+  PlayCircle,
+  PauseCircle,
   History,
   Lock,
   CheckCircle,
   Warning,
   Error,
-  HourglassEmpty,
-  Link as LinkIcon,
   Schedule,
   AccessTime,
   Description,
   Bolt,
   CalendarMonth,
+  Timeline,
 } from '@mui/icons-material';
 import AppCard from '@/components/common/AppCard';
 import AppButton from '@/components/common/AppButton';
 import AppTable, { Column } from '@/components/common/AppTable';
 import ConfirmDialog from '@/components/common/ConfirmDialog';
 import { scheduleApi, dashboardApi, Schedule as ScheduleType } from '@/lib/api-client';
+import { useToast } from '@/components/common/ToastProvider';
+import FailureHistoryDialog from '@/components/common/FailureHistoryDialog';
 
 /** 실행 설정 미리보기 컴포넌트 */
 function ExecutionPreview({
@@ -237,6 +241,7 @@ function ExecutionStatusBadge({
 
 export default function SchedulesPage() {
   const router = useRouter();
+  const toast = useToast();
   const [schedules, setSchedules] = useState<ScheduleType[]>([]);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -245,6 +250,12 @@ export default function SchedulesPage() {
   const [menuAnchor, setMenuAnchor] = useState<{ element: HTMLElement; schedule: ScheduleType } | null>(
     null
   );
+  const [actionTarget, setActionTarget] = useState<{
+    type: 'pause' | 'resume' | 'run';
+    schedule: ScheduleType;
+  } | null>(null);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [failureSchedule, setFailureSchedule] = useState<ScheduleType | null>(null);
 
   // 세션 상태 (API에서 가져옴)
   const [sessionHealthy, setSessionHealthy] = useState(true);
@@ -280,53 +291,74 @@ export default function SchedulesPage() {
     loadSessionStatus();
   }, [page]);
 
-  const handleToggle = async (schedule: ScheduleType) => {
-    // 관리자 게이트가 APPROVED가 아니면 토글 불가
+  const validateRunPrerequisites = (schedule: ScheduleType) => {
+    if (!schedule.userEnabled) {
+      return '스케줄이 비활성화되어 있습니다. 먼저 활성화해주세요.';
+    }
     if (schedule.adminStatus !== 'APPROVED') {
-      alert(
-        schedule.adminStatus === 'NEEDS_REVIEW' 
+      return '관리자 승인이 필요합니다.';
+    }
+    if (!sessionHealthy) {
+      return '네이버 연동이 필요합니다. 설정에서 연동 상태를 확인해주세요.';
+    }
+    return null;
+  };
+
+  const performToggle = async (schedule: ScheduleType, newEnabled: boolean) => {
+    if (schedule.adminStatus !== 'APPROVED') {
+      toast.warning(
+        schedule.adminStatus === 'NEEDS_REVIEW'
           ? '관리자 승인 대기 중입니다. 승인 후 활성화할 수 있습니다.'
-          : `관리자에 의해 ${schedule.adminStatus === 'SUSPENDED' ? '일시 중지' : '차단'}되었습니다.${schedule.adminReason ? `\n사유: ${schedule.adminReason}` : ''}`
+          : `관리자에 의해 ${schedule.adminStatus === 'SUSPENDED' ? '일시 중지' : '차단'}되었습니다.${schedule.adminReason ? ` 사유: ${schedule.adminReason}` : ''}`
       );
       return;
     }
 
     try {
-      const newEnabled = !schedule.userEnabled;
       await scheduleApi.toggleEnabled(schedule.id, newEnabled);
-      loadSchedules();
+      toast.success(newEnabled ? '스케줄이 재개되었습니다.' : '스케줄이 일시 중지되었습니다.');
+      await loadSchedules();
     } catch (error) {
-      alert('상태 변경 실패');
+      toast.error('상태 변경에 실패했습니다.');
     }
   };
 
-  const handleRunNow = async (schedule: ScheduleType) => {
-    // 실행 조건 체크
-    if (!schedule.userEnabled) {
-      alert('스케줄이 비활성화되어 있습니다. 먼저 활성화해주세요.');
-      return;
-    }
-    if (schedule.adminStatus !== 'APPROVED') {
-      alert('관리자 승인이 필요합니다.');
-      return;
-    }
-    if (!sessionHealthy) {
-      alert('네이버 연동이 필요합니다. 설정에서 연동 상태를 확인해주세요.');
+  const performRunNow = async (schedule: ScheduleType) => {
+    const validation = validateRunPrerequisites(schedule);
+    if (validation) {
+      toast.warning(validation);
       return;
     }
 
     try {
       await scheduleApi.runNow(schedule.id);
-      alert(`"${schedule.name}" 스케줄이 즉시 실행되었습니다.`);
-      loadSchedules();
+      toast.success(`"${schedule.name}" 스케줄이 즉시 실행되었습니다.`);
+      await loadSchedules();
     } catch (error: any) {
       if (error?.message?.includes('이미 실행되었습니다')) {
-        alert('오늘은 이미 실행되어 중복 실행되지 않았습니다.');
+        toast.info('오늘은 이미 실행되어 중복 실행되지 않았습니다.');
       } else {
-        alert('즉시 실행 실패: ' + (error?.message || '알 수 없는 오류'));
+        toast.error(`즉시 실행 실패: ${error?.message || '알 수 없는 오류'}`);
       }
     } finally {
       setMenuAnchor(null);
+    }
+  };
+
+  const handleActionConfirm = async () => {
+    if (!actionTarget) return;
+    setActionLoading(true);
+    const { type, schedule } = actionTarget;
+
+    try {
+      if (type === 'run') {
+        await performRunNow(schedule);
+      } else {
+        await performToggle(schedule, type === 'resume');
+      }
+    } finally {
+      setActionLoading(false);
+      setActionTarget(null);
     }
   };
 
@@ -385,6 +417,157 @@ export default function SchedulesPage() {
     } catch {
       return { text: '-', isActive: false };
     }
+  };
+
+  const formatRelativeTime = (dateStr?: string | null) => {
+    if (!dateStr) return null;
+    const date = new Date(dateStr);
+    const diffMs = date.getTime() - Date.now();
+    const diffMinutes = Math.round(Math.abs(diffMs) / (1000 * 60));
+    const diffHours = Math.round(Math.abs(diffMs) / (1000 * 60 * 60));
+
+    if (diffMinutes < 1) return '지금';
+    if (diffMinutes < 60) return diffMs >= 0 ? `${diffMinutes}분 후` : `${diffMinutes}분 전`;
+    if (diffHours < 24) return diffMs >= 0 ? `${diffHours}시간 후` : `${diffHours}시간 전`;
+    const diffDays = Math.round(diffHours / 24);
+    return diffMs >= 0 ? `${diffDays}일 후` : `${diffDays}일 전`;
+  };
+
+  const getNextRunInfo = (schedule: ScheduleType) => {
+    if (schedule.nextRunAt) {
+      const date = new Date(schedule.nextRunAt);
+      const timeText = date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+      const dayText = date.toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' });
+      return {
+        text: `${dayText} ${timeText}`,
+        subText: formatRelativeTime(schedule.nextRunAt) || undefined,
+        isActive: true,
+      };
+    }
+
+    return calculateNextRun(schedule);
+  };
+
+  const renderExecutionTimeline = (row: ScheduleType) => {
+    const nextRun = getNextRunInfo(row);
+    const lastStatus = row.lastRunStatus;
+    const lastRunText = row.lastRunFinishedAt || row.lastRunDate;
+    const dailyCount = row.dailyRunCount ?? 0;
+    const weeklyCount = row.weeklyRunCount ?? 0;
+
+    return (
+      <Box
+        sx={{
+          p: 1.5,
+          borderRadius: 2,
+          border: '1px dashed',
+          borderColor: (theme) => alpha(theme.palette.primary.main, 0.2),
+          bgcolor: (theme) => alpha(theme.palette.primary.main, 0.03),
+        }}
+      >
+        <Stack spacing={1.25}>
+          <Stack direction="row" alignItems="center" spacing={1}>
+            <AccessTime sx={{ fontSize: 16, color: nextRun.isActive ? 'primary.main' : 'text.disabled' }} />
+            <Box>
+              <Typography
+                variant="body2"
+                sx={{ fontWeight: 700, color: nextRun.isActive ? 'primary.main' : 'text.disabled' }}
+              >
+                다음 실행 · {nextRun.text}
+              </Typography>
+              {nextRun.subText && (
+                <Typography variant="caption" color="text.secondary">
+                  {nextRun.subText}
+                </Typography>
+              )}
+            </Box>
+          </Stack>
+
+          <Stack direction="row" alignItems="center" spacing={1}>
+            {lastStatus === 'SUCCESS' && <CheckCircle sx={{ fontSize: 16, color: 'success.main' }} />}
+            {lastStatus === 'FAILED' && <Error sx={{ fontSize: 16, color: 'error.main' }} />}
+            {!lastStatus && <Timeline sx={{ fontSize: 16, color: 'text.disabled' }} />}
+            <Box>
+              <Typography variant="body2" sx={{ fontWeight: 700, color: lastStatus === 'FAILED' ? 'error.main' : 'text.primary' }}>
+                최근 실행 · {lastStatus === 'SUCCESS' ? '성공' : lastStatus === 'FAILED' ? '실패' : '기록 없음'}
+              </Typography>
+              <Typography variant="caption" color="text.secondary">
+                {formatRelativeTime(lastRunText) || '-'}
+              </Typography>
+            </Box>
+          </Stack>
+
+          <Divider sx={{ my: 0.5 }} />
+
+          <Stack direction="row" spacing={1} flexWrap="wrap">
+            <Chip
+              size="small"
+              icon={<Bolt sx={{ fontSize: 16 }} />}
+              label={`일일 실행 ${dailyCount}회`}
+              sx={{ fontWeight: 700 }}
+            />
+            <Chip
+              size="small"
+              icon={<CalendarMonth sx={{ fontSize: 16 }} />}
+              label={`주간 실행 ${weeklyCount}회`}
+              color="primary"
+              variant="outlined"
+              sx={{ fontWeight: 700 }}
+            />
+          </Stack>
+        </Stack>
+      </Box>
+    );
+  };
+
+  const renderWarningBadges = (row: ScheduleType) => {
+    const badges = [];
+    if (row.limitExceeded) {
+      badges.push(
+        <Chip
+          key="limit"
+          size="small"
+          color="error"
+          label="한도 초과"
+          sx={{ fontWeight: 700 }}
+        />
+      );
+    }
+    if (row.queueDelayedMinutes) {
+      badges.push(
+        <Chip
+          key="queue"
+          size="small"
+          color="warning"
+          label={`대기열 지연 ${row.queueDelayedMinutes}분`}
+          sx={{ fontWeight: 700 }}
+        />
+      );
+    }
+    if (row.recentFailures && row.recentFailures.length > 0) {
+      badges.push(
+        <Chip
+          key="failures"
+          size="small"
+          color="error"
+          variant="outlined"
+          label="실패 이력 확인"
+          onClick={(e) => {
+            e.stopPropagation();
+            setFailureSchedule(row);
+          }}
+          sx={{ fontWeight: 700 }}
+        />
+      );
+    }
+
+    if (badges.length === 0) return null;
+
+    return (
+      <Stack direction="row" spacing={0.75} flexWrap="wrap">
+        {badges}
+      </Stack>
+    );
   };
 
   const columns: Column<ScheduleType>[] = [
@@ -453,57 +636,23 @@ export default function SchedulesPage() {
     },
     {
       id: 'nextRun',
-      label: '다음 실행',
-      minWidth: 130,
-      render: (row: ScheduleType) => {
-        const nextRun = calculateNextRun(row);
-        const isImmediate = row.scheduleType === 'IMMEDIATE';
-
-        return (
-          <Box>
-            <Typography
-              variant="body2"
-              sx={{
-                fontWeight: nextRun.isActive ? 600 : 400,
-                color: nextRun.isActive
-                  ? isImmediate
-                    ? 'success.main'
-                    : 'primary.main'
-                  : 'text.disabled',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 0.5,
-              }}
-            >
-              {isImmediate && nextRun.isActive && <Bolt sx={{ fontSize: 14 }} />}
-              {nextRun.text}
-            </Typography>
-            {nextRun.subText && nextRun.isActive && (
-              <Typography
-                variant="caption"
-                sx={{
-                  color: 'text.disabled',
-                  fontSize: '0.7rem',
-                  display: 'block',
-                }}
-              >
-                {nextRun.subText}
-              </Typography>
-            )}
-          </Box>
-        );
-      },
+      label: '실행 현황',
+      minWidth: 260,
+      render: (row: ScheduleType) => renderExecutionTimeline(row),
     },
     {
       id: 'status',
       label: '상태',
       minWidth: 120,
       render: (row: ScheduleType) => (
-        <ExecutionStatusBadge
-          userEnabled={row.userEnabled ?? true}
-          adminStatus={row.adminStatus ?? 'APPROVED'}
-          sessionHealthy={sessionHealthy}
-        />
+        <Stack spacing={0.75} alignItems="flex-start">
+          <ExecutionStatusBadge
+            userEnabled={row.userEnabled ?? true}
+            adminStatus={row.adminStatus ?? 'APPROVED'}
+            sessionHealthy={sessionHealthy}
+          />
+          {renderWarningBadges(row)}
+        </Stack>
       ),
     },
     {
@@ -528,7 +677,12 @@ export default function SchedulesPage() {
             <Box sx={{ position: 'relative', display: 'inline-flex' }}>
               <Switch
                 checked={enabled}
-                onChange={() => handleToggle(row)}
+                onChange={() =>
+                  setActionTarget({
+                    type: enabled ? 'pause' : 'resume',
+                    schedule: row,
+                  })
+                }
                 size="small"
                 disabled={isLocked}
               />
@@ -553,21 +707,83 @@ export default function SchedulesPage() {
       label: '',
       minWidth: 60,
       align: 'center' as const,
-      render: (row: ScheduleType) => (
-        <IconButton
-          size="small"
-          onClick={(e) => {
-            e.stopPropagation();
-            setMenuAnchor({ element: e.currentTarget, schedule: row });
-          }}
-          sx={{
-            color: 'text.secondary',
-            '&:hover': { bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08) },
-          }}
-        >
-          <MoreVert fontSize="small" />
-        </IconButton>
-      ),
+      render: (row: ScheduleType) => {
+        const enabled = row.userEnabled ?? row.status === 'ACTIVE';
+        const runDisabled = !row.userEnabled || row.adminStatus !== 'APPROVED' || !sessionHealthy;
+
+        return (
+          <Stack direction="row" spacing={1} alignItems="center" justifyContent="flex-end">
+            <AppButton
+              size="small"
+              variant={enabled ? 'outlined' : 'contained'}
+              startIcon={enabled ? <PauseCircle /> : <PlayCircle />}
+              disabled={actionLoading}
+              onClick={(e) => {
+                e.stopPropagation();
+                setActionTarget({ type: enabled ? 'pause' : 'resume', schedule: row });
+              }}
+            >
+              {enabled ? '일시정지' : '재개'}
+            </AppButton>
+
+            <Tooltip
+              title={
+                runDisabled
+                  ? !row.userEnabled
+                    ? '비활성화된 스케줄입니다'
+                    : !sessionHealthy
+                      ? '연동이 필요합니다'
+                      : '관리자 승인 대기'
+                  : '즉시 실행'
+              }
+            >
+              <span>
+                <AppButton
+                  size="small"
+                  variant="contained"
+                  startIcon={<PlayArrow />}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setActionTarget({ type: 'run', schedule: row });
+                  }}
+                  disabled={runDisabled || actionLoading}
+                  sx={{ minWidth: 108 }}
+                >
+                  지금 실행
+                </AppButton>
+              </span>
+            </Tooltip>
+
+            <Tooltip title="실패 이력 보기">
+              <AppButton
+                size="small"
+                variant="text"
+                startIcon={<History />}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFailureSchedule(row);
+                }}
+              >
+                이력
+              </AppButton>
+            </Tooltip>
+
+            <IconButton
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuAnchor({ element: e.currentTarget, schedule: row });
+              }}
+              sx={{
+                color: 'text.secondary',
+                '&:hover': { bgcolor: (theme) => alpha(theme.palette.primary.main, 0.08) },
+              }}
+            >
+              <MoreVert fontSize="small" />
+            </IconButton>
+          </Stack>
+        );
+      },
     },
   ];
 
@@ -700,7 +916,14 @@ export default function SchedulesPage() {
           </ListItemIcon>
           <ListItemText>수정</ListItemText>
         </MenuItem>
-        <MenuItem onClick={() => menuAnchor && handleRunNow(menuAnchor.schedule)}>
+        <MenuItem
+          onClick={() => {
+            if (menuAnchor) {
+              setActionTarget({ type: 'run', schedule: menuAnchor.schedule });
+              setMenuAnchor(null);
+            }
+          }}
+        >
           <ListItemIcon>
             <PlayArrow fontSize="small" />
           </ListItemIcon>
@@ -733,6 +956,25 @@ export default function SchedulesPage() {
       </Menu>
 
       <ConfirmDialog
+        open={!!actionTarget}
+        title={
+          actionTarget?.type === 'run'
+            ? '스케줄을 지금 실행할까요?'
+            : actionTarget?.type === 'pause'
+              ? '스케줄을 일시정지할까요?'
+              : '스케줄을 다시 실행할까요?'
+        }
+        message={
+          actionTarget
+            ? `"${actionTarget.schedule.name}" 스케줄을 ${actionTarget.type === 'run' ? '즉시 실행' : actionTarget.type === 'pause' ? '일시정지' : '재개'}합니다.`
+            : ''
+        }
+        onConfirm={handleActionConfirm}
+        onCancel={() => setActionTarget(null)}
+        confirmText="확인"
+      />
+
+      <ConfirmDialog
         open={!!deleteTarget}
         title="스케줄 삭제"
         message={`"${deleteTarget?.name}" 스케줄을 삭제하시겠습니까?`}
@@ -741,6 +983,15 @@ export default function SchedulesPage() {
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />
+
+      {failureSchedule && (
+        <FailureHistoryDialog
+          open={!!failureSchedule}
+          scheduleId={failureSchedule.id}
+          scheduleName={failureSchedule.name}
+          onClose={() => setFailureSchedule(null)}
+        />
+      )}
     </Box>
   );
 }
