@@ -54,6 +54,7 @@ import {
   NaverAccount,
   NaverSession,
 } from '@/lib/api-client';
+import { toWorkerErrorGuide } from '@/lib/worker-error';
 
 interface UserProfile {
   id: string;
@@ -91,6 +92,7 @@ export default function SettingsPage() {
   // 연동 진행 상태
   const [linkingStep, setLinkingStep] = useState<LinkingStep>('idle');
   const [linkingError, setLinkingError] = useState<string | null>(null);
+  const [linkingGuide, setLinkingGuide] = useState<ReturnType<typeof toWorkerErrorGuide>>(null);
   const [linkingSessionId, setLinkingSessionId] = useState<string | null>(null);
 
   // 삭제 확인 다이얼로그
@@ -155,6 +157,7 @@ export default function SettingsPage() {
     }
 
     setLinkingError(null);
+    setLinkingGuide(null);
     setLinkingStep('saving');
 
     try {
@@ -205,9 +208,17 @@ export default function SettingsPage() {
     } catch (error) {
       console.error('네이버 계정 추가 실패:', error);
       setLinkingStep('error');
-      setLinkingError(
-        error instanceof Error ? error.message : '연동에 실패했습니다.'
+      const message = error instanceof Error ? error.message : '연동에 실패했습니다.';
+      setLinkingError(message);
+      const sessionError = linkingSessionId
+        ? naverSessions.find((s) => s.id === linkingSessionId)
+        : null;
+      const guide = toWorkerErrorGuide(
+        sessionError?.errorMessage || message,
+        sessionError?.errorCode,
+        'INIT_SESSION'
       );
+      setLinkingGuide(guide);
       // 실패해도 목록은 새로고침
       await loadNaverAccounts();
       await loadNaverSessions();
@@ -219,6 +230,7 @@ export default function SettingsPage() {
     setShowPassword(false);
     setLinkingStep('idle');
     setLinkingError(null);
+    setLinkingGuide(null);
     setLinkingSessionId(null);
   };
 
@@ -352,6 +364,89 @@ export default function SettingsPage() {
     }
   };
 
+  const getStatusTooltip = (status: NaverSession['status']) => {
+    switch (status) {
+      case 'HEALTHY':
+        return '네이버에 정상 로그인된 세션입니다.';
+      case 'PENDING':
+        return '브라우저 프로필을 만들고 로그인 중입니다. 최대 90초 정도 소요됩니다.';
+      case 'EXPIRING':
+        return '쿠키 만료가 임박했습니다. 재검증 또는 재연결을 권장합니다.';
+      case 'EXPIRED':
+        return '세션 쿠키가 만료되었습니다. 다시 로그인해야 합니다.';
+      case 'CHALLENGE_REQUIRED':
+        return 'CAPTCHA/2단계 인증 등 추가 인증이 필요합니다.';
+      case 'ERROR':
+        return '로그인 실패 등 오류로 세션이 중단되었습니다.';
+      default:
+        return '';
+    }
+  };
+
+  const estimateRemainingValidity = (session: NaverSession) => {
+    const ttlDays = 30; // 네이버 세션 쿠키 가정치
+    const base = session.lastVerifiedAt || session.createdAt;
+    if (!base) return null;
+    const expiresAt = new Date(base);
+    expiresAt.setDate(expiresAt.getDate() + ttlDays);
+    const remainingMs = expiresAt.getTime() - Date.now();
+    if (remainingMs <= 0) return { text: '만료됨', expiresAt };
+    const remainingDays = Math.ceil(remainingMs / (1000 * 60 * 60 * 24));
+    return { text: `약 ${remainingDays}일`, expiresAt };
+  };
+
+  const renderErrorGuide = (
+    guide: ReturnType<typeof toWorkerErrorGuide>,
+    sessionId?: string | null
+  ) => {
+    if (!guide) return null;
+    return (
+      <Alert
+        severity={guide.severity === 'error' ? 'error' : 'warning'}
+        sx={{ mt: 1, borderRadius: 2 }}
+      >
+        <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>
+          {guide.headline}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+          {guide.description}
+        </Typography>
+        <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5, mb: 1 }}>
+          {guide.hints.map((hint) => (
+            <Chip key={hint} label={hint} size="small" />
+          ))}
+        </Box>
+        <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap' }}>
+          {guide.actionPrimary && (
+            <AppButton
+              size="small"
+              variant="contained"
+              onClick={() => {
+                const targetSessionId = sessionId || linkingSessionId;
+                if (targetSessionId) {
+                  handleReconnectSession(targetSessionId);
+                } else {
+                  handleAddAccount();
+                }
+              }}
+            >
+              {guide.actionPrimary}
+            </AppButton>
+          )}
+          {guide.actionSecondary && (
+            <AppButton
+              size="small"
+              variant="outlined"
+              onClick={() => window.open('https://nid.naver.com/nidlogin.login', '_blank')}
+            >
+              {guide.actionSecondary}
+            </AppButton>
+          )}
+        </Box>
+      </Alert>
+    );
+  };
+
   return (
     <Box>
       {/* 페이지 타이틀 */}
@@ -426,6 +521,8 @@ export default function SettingsPage() {
             <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
               네이버 카페에 자동 게시하기 위해 네이버 계정을 연동합니다.
               아이디/비밀번호 입력 후 자동으로 연결됩니다.
+              <br />
+              <strong>예상 소요 시간: 약 60~90초</strong> · 브라우저 쿠키를 생성한 뒤 필요 시 2단계 인증 안내를 드립니다.
             </Typography>
 
             {accountsLoading ? (
@@ -534,22 +631,24 @@ export default function SettingsPage() {
                                 {account.displayName || account.loginId}
                               </Typography>
                               {session && (
-                                <Chip
-                                  size="small"
-                                  label={statusInfo?.label || session.status}
-                                  sx={{
-                                    height: 22,
-                                    fontSize: 11,
-                                    fontWeight: 600,
-                                    backgroundColor: statusInfo
-                                      ? (theme) => alpha(
-                                          theme.palette[statusInfo.color.split('.')[0] as 'success' | 'error' | 'warning' | 'info'].main,
-                                          0.1
-                                        )
-                                      : 'action.hover',
-                                    color: statusInfo?.color || 'text.secondary',
-                                  }}
-                                />
+                                <Tooltip title={getStatusTooltip(session.status)} arrow>
+                                  <Chip
+                                    size="small"
+                                    label={statusInfo?.label || session.status}
+                                    sx={{
+                                      height: 22,
+                                      fontSize: 11,
+                                      fontWeight: 600,
+                                      backgroundColor: statusInfo
+                                        ? (theme) => alpha(
+                                            theme.palette[statusInfo.color.split('.')[0] as 'success' | 'error' | 'warning' | 'info'].main,
+                                            0.1
+                                          )
+                                        : 'action.hover',
+                                      color: statusInfo?.color || 'text.secondary',
+                                    }}
+                                  />
+                                </Tooltip>
                               )}
                             </Box>
                             <Typography variant="body2" color="text.secondary">
@@ -558,16 +657,37 @@ export default function SettingsPage() {
                                 <> · 닉네임: <strong>{session.naverNickname}</strong></>
                               )}
                             </Typography>
-                            {session?.lastVerifiedAt && (
-                              <Typography variant="caption" color="text.secondary">
-                                마지막 확인: {new Date(session.lastVerifiedAt).toLocaleString('ko-KR')}
-                              </Typography>
-                            )}
-                            {session?.errorMessage && (
-                              <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 0.5 }}>
-                                {session.errorMessage}
-                              </Typography>
-                            )}
+                            <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 0.5 }}>
+                              {session?.lastVerifiedAt && (
+                                <Chip
+                                  size="small"
+                                  icon={<Schedule fontSize="small" />}
+                                  label={`마지막 검증: ${new Date(session.lastVerifiedAt).toLocaleString('ko-KR')}`}
+                                  sx={{ fontSize: 11 }}
+                                />
+                              )}
+                              {session && (
+                                <Chip
+                                  size="small"
+                                  icon={<Schedule fontSize="small" />}
+                                  label={
+                                    estimateRemainingValidity(session)
+                                      ? `남은 유효기간: ${estimateRemainingValidity(session)?.text}`
+                                      : '유효기간 계산 불가'
+                                  }
+                                  sx={{ fontSize: 11 }}
+                                />
+                              )}
+                            </Box>
+                            {session &&
+                              renderErrorGuide(
+                                toWorkerErrorGuide(
+                                  session.errorMessage,
+                                  session.errorCode || undefined,
+                                  'INIT_SESSION'
+                                ),
+                                session.id
+                              )}
                           </Box>
                         </Box>
 
@@ -602,6 +722,17 @@ export default function SettingsPage() {
                                     ) : (
                                       <Refresh fontSize="small" />
                                     )}
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title="로그아웃/세션 삭제">
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    onClick={() => setDeleteSessionTarget(session)}
+                                    disabled={session.status === 'PENDING'}
+                                  >
+                                    <LinkOff fontSize="small" />
                                   </IconButton>
                                 </span>
                               </Tooltip>
@@ -730,17 +861,45 @@ export default function SettingsPage() {
 
           {/* 에러 표시 */}
           {linkingError && (
-            <Alert severity="error" sx={{ mb: 2, borderRadius: 2 }}>
-              {linkingError}
-            </Alert>
+            <Box sx={{ mb: 2 }}>
+              {renderErrorGuide(
+                linkingGuide || toWorkerErrorGuide(linkingError, linkingGuide?.errorCode, 'INIT_SESSION'),
+                linkingSessionId
+              ) || (
+                <Alert severity="error" sx={{ borderRadius: 2 }}>
+                  {linkingError}
+                </Alert>
+              )}
+            </Box>
           )}
 
           {/* 입력 폼 - 진행 중이 아닐 때만 표시 */}
           {(linkingStep === 'idle' || linkingStep === 'error') && (
             <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2.5 }}>
               <Alert severity="info" sx={{ borderRadius: 2 }}>
-                네이버 아이디와 비밀번호는 암호화되어 안전하게 저장됩니다.
+                네이버 아이디와 비밀번호는 암호화되어 안전하게 저장됩니다. 연동 과정은
+                <strong> 계정 저장 → 브라우저 쿠키 생성 → 추가 인증 확인 </strong>
+                순으로 진행되며 약 60~90초 소요됩니다.
               </Alert>
+              <Paper
+                variant="outlined"
+                sx={{ p: 2, borderRadius: 2, bgcolor: 'action.hover' }}
+              >
+                <Typography variant="subtitle2" sx={{ mb: 1 }}>
+                  단계별 안내
+                </Typography>
+                <Typography variant="body2" color="text.secondary">
+                  1) 계정 저장(≈3초): 입력한 정보를 암호화하여 보관합니다.
+                  <br />
+                  2) 쿠키/세션 생성(≈40초): 브라우저를 열어 자동 로그인합니다.
+                  <br />
+                  3) 인증 확인(≈20초): 2단계 인증 또는 CAPTCHA가 필요한 경우 알림을 드립니다.
+                </Typography>
+                <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+                  ▪ 네이버에서 OTP/보안코드를 요구하면 “직접 인증” 버튼을 눌러 로그인해주세요.
+                  ▪ 실패 시 ‘재시도’로 다시 연결을 시도할 수 있습니다.
+                </Typography>
+              </Paper>
 
               <TextField
                 label="네이버 아이디"

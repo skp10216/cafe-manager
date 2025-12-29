@@ -60,6 +60,7 @@ import {
 import { jobApi, Job, JobLog, DeleteFilterType } from '@/lib/api-client';
 import StatusChip from '@/components/common/StatusChip';
 import { useToast } from '@/components/common/ToastProvider';
+import { toWorkerErrorGuide } from '@/lib/worker-error';
 
 /** Job 타입 라벨 */
 const JOB_TYPE_LABELS: Record<string, string> = {
@@ -156,6 +157,21 @@ export default function LogsPage() {
   const [deleteType, setDeleteType] = useState<'selected' | DeleteFilterType>('selected');
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [deleteMenuAnchor, setDeleteMenuAnchor] = useState<null | HTMLElement>(null);
+
+  const selectedJobErrorGuide = selectedJob
+    ? toWorkerErrorGuide(
+        selectedJob.errorMessage,
+        selectedJob.errorCode || undefined,
+        selectedJob.type === 'INIT_SESSION' || selectedJob.type === 'VERIFY_SESSION'
+          ? selectedJob.type
+          : 'JOB'
+      )
+    : null;
+  const selectedJobErrorMessage =
+    selectedJobErrorGuide?.headline ||
+    selectedJobErrorGuide?.description ||
+    selectedJob?.errorMessage ||
+    null;
 
   // ==============================================
   // 날짜 범위 계산
@@ -812,7 +828,7 @@ export default function LogsPage() {
               </Box>
 
               {/* 에러 정보 (코드 + 메시지 + 가이드) */}
-              {(selectedJob.errorMessage || selectedJob.errorCode) && (
+              {(selectedJobErrorMessage || selectedJob?.errorCode) && (
                 <Box sx={{ mb: 3 }}>
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                     실패 원인
@@ -825,7 +841,7 @@ export default function LogsPage() {
                       borderColor: '#FECACA',
                     }}
                   >
-                    {selectedJob.errorCode && (
+                    {selectedJob?.errorCode && (
                       <Box sx={{ mb: 1 }}>
                         <Chip
                           label={ERROR_CODE_LABELS[selectedJob.errorCode] || selectedJob.errorCode}
@@ -835,12 +851,12 @@ export default function LogsPage() {
                         />
                       </Box>
                     )}
-                    {selectedJob.errorMessage && (
+                    {selectedJobErrorMessage && (
                       <Typography variant="body2" color="error" sx={{ mb: 1 }}>
-                        {selectedJob.errorMessage}
+                        {selectedJobErrorMessage}
                       </Typography>
                     )}
-                    {selectedJob.errorCode && ERROR_CODE_GUIDES[selectedJob.errorCode] && (
+                    {selectedJob?.errorCode && ERROR_CODE_GUIDES[selectedJob.errorCode] && (
                       <Typography variant="caption" sx={{ color: 'text.secondary', display: 'block', mt: 1 }}>
                         💡 {ERROR_CODE_GUIDES[selectedJob.errorCode]}
                       </Typography>
