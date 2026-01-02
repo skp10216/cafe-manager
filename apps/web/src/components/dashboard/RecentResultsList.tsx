@@ -1,9 +1,10 @@
 'use client';
 
 /**
- * 섹션 D: 최근 결과 리스트 컴포넌트 - Premium Edition
+ * 섹션 D: 최근 결과 리스트 컴포넌트 - Premium Edition v2
  * 
  * 개선 사항:
+ * - embedded 모드 지원 (다른 컨테이너에 포함될 때)
  * - Segmented Control 스타일 필터 (명확한 선택 상태)
  * - 3열 구조: 상태+템플릿 | 시간 | CTA
  * - 실패 항목에 재시도 버튼 강조
@@ -80,6 +81,8 @@ interface RecentResultsListProps {
   onViewLog?: (jobId: string) => void;
   /** 필터 변경 핸들러 */
   onFilterChange?: (filter: 'ALL' | 'SUCCESS' | 'FAILED') => void;
+  /** 내장 모드 (다른 컨테이너에 포함될 때) */
+  embedded?: boolean;
 }
 
 /** 소요 시간 포맷 */
@@ -127,6 +130,7 @@ export default function RecentResultsList({
   onRetry,
   onViewLog,
   onFilterChange,
+  embedded = false,
 }: RecentResultsListProps) {
   const router = useRouter();
   const [filter, setFilter] = useState<'ALL' | 'SUCCESS' | 'FAILED'>('ALL');
@@ -146,6 +150,19 @@ export default function RecentResultsList({
 
   // 로딩 상태
   if (loading) {
+    if (embedded) {
+      return (
+        <Box>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1.5 }}>
+            <Skeleton width="40%" height={32} />
+          </Box>
+          {[1, 2, 3].map((i) => (
+            <Skeleton key={i} variant="rounded" height={52} sx={{ mb: 1, borderRadius: 1.5 }} />
+          ))}
+        </Box>
+      );
+    }
+
     return (
       <Paper
         elevation={0}
@@ -167,54 +184,19 @@ export default function RecentResultsList({
     );
   }
 
-  return (
-    <Paper
-      elevation={0}
-      sx={{
-        borderRadius: 3,
-        border: '1px solid',
-        borderColor: 'divider',
-        overflow: 'hidden',
-      }}
-    >
-      {/* ========================================
-          헤더 + Segmented Control 필터
-          ======================================== */}
+  // 내용 렌더링
+  const renderContent = () => (
+    <>
+      {/* 필터 (embedded 모드에서도 표시) */}
       <Box
         sx={{
-          px: 2.5,
-          py: 2,
-          borderBottom: '1px solid',
-          borderColor: 'divider',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 1.5,
-          backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.8),
+          mb: 1.5,
+          gap: 1,
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <Avatar
-            sx={{
-              width: 36,
-              height: 36,
-              backgroundColor: (theme) => alpha(theme.palette.info.main, 0.1),
-            }}
-          >
-            <HistoryToggleOff sx={{ fontSize: 20, color: 'info.main' }} />
-          </Avatar>
-          <Box>
-            <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem', lineHeight: 1.2 }}>
-              최근 결과
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              총 {total}건
-            </Typography>
-          </Box>
-        </Box>
-
-        {/* Segmented Control 필터 */}
         <ToggleButtonGroup
           value={filter}
           exclusive
@@ -222,21 +204,21 @@ export default function RecentResultsList({
           size="small"
           sx={{
             backgroundColor: (theme) => alpha(theme.palette.grey[500], 0.06),
-            borderRadius: 2,
-            p: 0.5,
+            borderRadius: 1.5,
+            p: 0.375,
             '& .MuiToggleButtonGroup-grouped': {
               border: 'none',
-              borderRadius: '8px !important',
-              px: 2,
-              py: 0.5,
-              fontSize: '0.8125rem',
+              borderRadius: '6px !important',
+              px: 1.5,
+              py: 0.375,
+              fontSize: '0.75rem',
               fontWeight: 600,
               textTransform: 'none',
               color: 'text.secondary',
               '&.Mui-selected': {
                 backgroundColor: 'background.paper',
                 color: 'primary.main',
-                boxShadow: '0 2px 8px rgba(0,0,0,0.08)',
+                boxShadow: '0 1px 4px rgba(0,0,0,0.08)',
                 '&:hover': {
                   backgroundColor: 'background.paper',
                 },
@@ -249,82 +231,39 @@ export default function RecentResultsList({
         >
           <ToggleButton value="ALL">전체</ToggleButton>
           <ToggleButton value="SUCCESS">
-            <CheckCircle sx={{ fontSize: 14, mr: 0.5, color: 'success.main' }} />
+            <CheckCircle sx={{ fontSize: 12, mr: 0.5, color: 'success.main' }} />
             성공
           </ToggleButton>
           <ToggleButton value="FAILED">
-            <ErrorIcon sx={{ fontSize: 14, mr: 0.5, color: 'error.main' }} />
+            <ErrorIcon sx={{ fontSize: 12, mr: 0.5, color: 'error.main' }} />
             실패
           </ToggleButton>
         </ToggleButtonGroup>
-      </Box>
 
-      {/* ========================================
-          실패 경고 배너 (실패가 있을 때만)
-          ======================================== */}
-      {filter === 'ALL' && failedCount > 0 && (
-        <Box
-          sx={{
-            px: 2.5,
-            py: 1.5,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            backgroundColor: (theme) => alpha(theme.palette.error.main, 0.06),
-            borderBottom: '1px solid',
-            borderColor: (theme) => alpha(theme.palette.error.main, 0.1),
-          }}
-        >
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Warning sx={{ fontSize: 18, color: 'error.main' }} />
-            <Typography variant="body2" sx={{ fontWeight: 600, color: 'error.main' }}>
-              오늘 실패 {failedCount}건
+        {failedCount > 0 && filter === 'ALL' && (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+            <Warning sx={{ fontSize: 14, color: 'error.main' }} />
+            <Typography sx={{ fontSize: '0.7rem', fontWeight: 600, color: 'error.main' }}>
+              {failedCount}건 실패
             </Typography>
           </Box>
-          <Stack direction="row" spacing={1}>
-            <Button
-              size="small"
-              variant="text"
-              onClick={() => {
-                setFilter('FAILED');
-                onFilterChange?.('FAILED');
-              }}
-              sx={{ fontSize: '0.75rem', fontWeight: 600 }}
-            >
-              실패만 보기
-            </Button>
-          </Stack>
-        </Box>
-      )}
+        )}
+      </Box>
 
-      {/* ========================================
-          빈 상태
-          ======================================== */}
+      {/* 빈 상태 */}
       {items.length === 0 ? (
-        <Box sx={{ p: 5, textAlign: 'center' }}>
-          <Avatar
-            sx={{
-              width: 56,
-              height: 56,
-              mb: 2,
-              mx: 'auto',
-              backgroundColor: (theme) => alpha(theme.palette.text.disabled, 0.08),
-            }}
-          >
-            <Article sx={{ fontSize: 28, color: 'text.disabled' }} />
-          </Avatar>
-          <Typography variant="body1" sx={{ fontWeight: 600, mb: 0.5, color: 'text.secondary' }}>
+        <Box sx={{ py: 4, textAlign: 'center' }}>
+          <Article sx={{ fontSize: 40, color: 'text.disabled', opacity: 0.3, mb: 1 }} />
+          <Typography variant="body2" sx={{ fontWeight: 600, color: 'text.secondary', mb: 0.5 }}>
             아직 게시 결과가 없습니다
           </Typography>
-          <Typography variant="body2" color="text.disabled">
+          <Typography variant="caption" color="text.disabled">
             스케줄을 실행하면 여기에 결과가 표시됩니다
           </Typography>
         </Box>
       ) : (
-        /* ========================================
-           결과 리스트 (3열 구조)
-           ======================================== */
-        <Box sx={{ maxHeight: 320, overflow: 'auto' }}>
+        /* 결과 리스트 */
+        <Box sx={{ maxHeight: embedded ? 260 : 320, overflow: 'auto' }}>
           {items.map((item, index) => {
             const isSuccess = item.status === 'COMPLETED';
 
@@ -334,103 +273,86 @@ export default function RecentResultsList({
                 sx={{
                   display: 'flex',
                   alignItems: 'center',
-                  gap: 2,
-                  px: 2.5,
-                  py: 1.75,
-                  borderBottom: index < items.length - 1 ? '1px solid' : 'none',
-                  borderColor: 'divider',
+                  gap: 1.5,
+                  px: 1.5,
+                  py: 1.25,
+                  borderRadius: 1.5,
+                  mb: index < items.length - 1 ? 0.75 : 0,
                   transition: 'background-color 0.15s ease',
                   backgroundColor: isSuccess
                     ? 'transparent'
-                    : (theme) => alpha(theme.palette.error.main, 0.02),
+                    : (theme) => alpha(theme.palette.error.main, 0.03),
+                  border: '1px solid',
+                  borderColor: isSuccess
+                    ? (theme) => alpha(theme.palette.success.main, 0.1)
+                    : (theme) => alpha(theme.palette.error.main, 0.15),
                   '&:hover': {
                     backgroundColor: (theme) =>
                       isSuccess
-                        ? alpha(theme.palette.action.hover, 0.5)
-                        : alpha(theme.palette.error.main, 0.04),
+                        ? alpha(theme.palette.success.main, 0.04)
+                        : alpha(theme.palette.error.main, 0.06),
                   },
                 }}
               >
-                {/* 열 1: 상태 아이콘 + 템플릿명 */}
-                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, flex: 1, minWidth: 0 }}>
-                  <Avatar
-                    sx={{
-                      width: 36,
-                      height: 36,
-                      backgroundColor: isSuccess
-                        ? (theme) => alpha(theme.palette.success.main, 0.1)
-                        : (theme) => alpha(theme.palette.error.main, 0.1),
-                      flexShrink: 0,
-                    }}
-                  >
-                    {isSuccess ? (
-                      <CheckCircle sx={{ color: 'success.main', fontSize: 20 }} />
-                    ) : (
-                      <ErrorIcon sx={{ color: 'error.main', fontSize: 20 }} />
-                    )}
-                  </Avatar>
-                  <Box sx={{ minWidth: 0 }}>
-                    <Typography
-                      variant="body2"
-                      sx={{
-                        fontWeight: 600,
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                        color: isSuccess ? 'text.primary' : 'error.dark',
-                      }}
-                    >
-                      {item.templateName || '템플릿'}
-                    </Typography>
-                    <Typography
-                      variant="caption"
-                      color="text.secondary"
-                      sx={{
-                        display: 'block',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap',
-                      }}
-                    >
-                      {item.cafeName || '카페'}
-                      {item.boardName && ` · ${item.boardName}`}
-                    </Typography>
-                  </Box>
-                </Box>
-
-                {/* 열 2: 시간 정보 */}
-                <Box
+                {/* 상태 아이콘 */}
+                <Avatar
                   sx={{
-                    display: 'flex',
-                    flexDirection: 'column',
-                    alignItems: 'flex-end',
-                    minWidth: 80,
+                    width: 32,
+                    height: 32,
+                    backgroundColor: isSuccess
+                      ? (theme) => alpha(theme.palette.success.main, 0.1)
+                      : (theme) => alpha(theme.palette.error.main, 0.1),
                     flexShrink: 0,
                   }}
                 >
+                  {isSuccess ? (
+                    <CheckCircle sx={{ color: 'success.main', fontSize: 18 }} />
+                  ) : (
+                    <ErrorIcon sx={{ color: 'error.main', fontSize: 18 }} />
+                  )}
+                </Avatar>
+
+                {/* 템플릿명 */}
+                <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography
-                    variant="caption"
                     sx={{
+                      fontSize: '0.8rem',
                       fontWeight: 600,
-                      color: 'text.primary',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 0.5,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                      color: isSuccess ? 'text.primary' : 'error.dark',
                     }}
                   >
-                    <AccessTime sx={{ fontSize: 12 }} />
-                    {formatRelativeTime(item.finishedAt || item.createdAt)}
+                    {item.templateName || '템플릿'}
                   </Typography>
-                  {item.durationSeconds !== null && (
-                    <Typography variant="caption" color="text.secondary">
-                      {formatDuration(item.durationSeconds)}
-                    </Typography>
-                  )}
+                  <Typography
+                    sx={{
+                      fontSize: '0.7rem',
+                      color: 'text.secondary',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}
+                  >
+                    {item.cafeName || '카페'}
+                  </Typography>
                 </Box>
 
-                {/* 열 3: CTA 버튼 */}
+                {/* 시간 */}
+                <Typography
+                  sx={{
+                    fontSize: '0.7rem',
+                    fontWeight: 500,
+                    color: 'text.secondary',
+                    flexShrink: 0,
+                  }}
+                >
+                  {formatRelativeTime(item.finishedAt || item.createdAt)}
+                </Typography>
+
+                {/* CTA */}
                 <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0 }}>
-                  {/* 성공: 결과 보기 */}
                   {isSuccess && item.resultUrl && (
                     <Tooltip title="게시글 보기">
                       <IconButton
@@ -438,6 +360,8 @@ export default function RecentResultsList({
                         href={item.resultUrl}
                         target="_blank"
                         sx={{
+                          width: 28,
+                          height: 28,
                           color: 'success.main',
                           backgroundColor: (theme) => alpha(theme.palette.success.main, 0.08),
                           '&:hover': {
@@ -445,17 +369,18 @@ export default function RecentResultsList({
                           },
                         }}
                       >
-                        <OpenInNew sx={{ fontSize: 16 }} />
+                        <OpenInNew sx={{ fontSize: 14 }} />
                       </IconButton>
                     </Tooltip>
                   )}
-                  {/* 실패: 재시도 버튼 (강조) */}
                   {!isSuccess && (
                     <Tooltip title="재시도">
                       <IconButton
                         size="small"
                         onClick={() => onRetry?.(item.jobId)}
                         sx={{
+                          width: 28,
+                          height: 28,
                           color: 'white',
                           backgroundColor: 'error.main',
                           '&:hover': {
@@ -463,32 +388,29 @@ export default function RecentResultsList({
                           },
                         }}
                       >
-                        <Refresh sx={{ fontSize: 16 }} />
+                        <Refresh sx={{ fontSize: 14 }} />
                       </IconButton>
                     </Tooltip>
                   )}
-                  {/* 로그 보기 버튼 */}
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    onClick={() => onViewLog?.(item.jobId)}
-                    sx={{
-                      minWidth: 'auto',
-                      px: 1.5,
-                      py: 0.5,
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      borderColor: 'divider',
-                      color: 'text.secondary',
-                      '&:hover': {
-                        borderColor: 'primary.main',
-                        color: 'primary.main',
-                        backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.04),
-                      },
-                    }}
-                  >
-                    로그
-                  </Button>
+                  <Tooltip title="로그 보기">
+                    <IconButton
+                      size="small"
+                      onClick={() => onViewLog?.(item.jobId)}
+                      sx={{
+                        width: 28,
+                        height: 28,
+                        border: '1px solid',
+                        borderColor: 'divider',
+                        color: 'text.secondary',
+                        '&:hover': {
+                          borderColor: 'primary.main',
+                          color: 'primary.main',
+                        },
+                      }}
+                    >
+                      <OpenInNew sx={{ fontSize: 14 }} />
+                    </IconButton>
+                  </Tooltip>
                 </Box>
               </Box>
             );
@@ -496,34 +418,78 @@ export default function RecentResultsList({
         </Box>
       )}
 
-      {/* ========================================
-          더보기 링크 (우측 상단 스타일)
-          ======================================== */}
+      {/* 더보기 */}
       {items.length > 0 && total > items.length && (
-        <Box
-          sx={{
-            px: 2.5,
-            py: 1.5,
-            borderTop: '1px solid',
-            borderColor: 'divider',
-            display: 'flex',
-            justifyContent: 'flex-end',
-            backgroundColor: (theme) => alpha(theme.palette.grey[500], 0.02),
-          }}
-        >
+        <Box sx={{ mt: 1.5, textAlign: 'right' }}>
           <Button
             size="small"
             variant="text"
-            endIcon={<OpenInNew sx={{ fontSize: 14 }} />}
+            endIcon={<OpenInNew sx={{ fontSize: 12 }} />}
             onClick={() => router.push('/logs?type=CREATE_POST')}
-            sx={{ fontWeight: 600 }}
+            sx={{ fontSize: '0.75rem', fontWeight: 600 }}
           >
             전체 {total}건 보기
           </Button>
         </Box>
       )}
+    </>
+  );
+
+  // embedded 모드
+  if (embedded) {
+    return <Box>{renderContent()}</Box>;
+  }
+
+  // 독립 모드 (기존 스타일)
+  return (
+    <Paper
+      elevation={0}
+      sx={{
+        borderRadius: 3,
+        border: '1px solid',
+        borderColor: (theme) => alpha(theme.palette.success.main, 0.15),
+        overflow: 'hidden',
+        backgroundColor: (theme) => alpha(theme.palette.success.main, 0.02),
+      }}
+    >
+      {/* 헤더 */}
+      <Box
+        sx={{
+          px: 2.5,
+          py: 2,
+          borderBottom: '1px solid',
+          borderColor: (theme) => alpha(theme.palette.success.main, 0.12),
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 1.5,
+          backgroundColor: (theme) => alpha(theme.palette.success.main, 0.04),
+        }}
+      >
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Avatar
+            sx={{
+              width: 36,
+              height: 36,
+              backgroundColor: (theme) => alpha(theme.palette.success.main, 0.1),
+            }}
+          >
+            <HistoryToggleOff sx={{ fontSize: 20, color: 'success.main' }} />
+          </Avatar>
+          <Box>
+            <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem', lineHeight: 1.2 }}>
+              최근 결과
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              총 {total}건
+            </Typography>
+          </Box>
+        </Box>
+      </Box>
+
+      {/* 콘텐츠 */}
+      <Box sx={{ p: 2 }}>{renderContent()}</Box>
     </Paper>
   );
 }
-
-

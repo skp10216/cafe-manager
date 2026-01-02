@@ -18,15 +18,13 @@
 import { useEffect, useState, useCallback } from 'react';
 import { Box, Typography, Grid } from '@mui/material';
 import { useRouter } from 'next/navigation';
-import { TrendingUp, Schedule } from '@mui/icons-material';
+import { Schedule } from '@mui/icons-material';
 
 // 대시보드 컴포넌트
 import {
   JobSummaryCards,
   NextRunCards,
   TodayTimeline,
-  RecentResultsList,
-  FailureSummary,
   OnboardingChecklist,
   StatusSummaryHeader,
   MultiRunTracker,
@@ -332,6 +330,7 @@ export default function DashboardPage() {
           섹션 2: 현재 실행 중인 작업 (Multi Run Tracker)
           - 복수 스케줄 동시 실행 지원
           - 마스터-디테일 UI 구조
+          - 스케줄이 등록되어 있으면 기본 펼침 상태
           ======================================== */}
       <Box sx={{ mb: 3 }}>
         <MultiRunTracker
@@ -341,66 +340,39 @@ export default function DashboardPage() {
             showFailureToast: true,
           }}
           onViewLogs={handleViewRunLogs}
+          defaultExpanded={data.onboarding.hasSchedule}
         />
       </Box>
 
       {/* ========================================
-          섹션 3: 오늘 작업 현황 (KPI 카드)
-          - Primary: 성공/실패 (크게)
-          - Secondary: 시도/진행중 (작게)
+          섹션 3: 오늘 작업 현황 (통합 컨테이너)
+          - KPI 카드 (성공/실패)
+          - 최근 결과 리스트
+          - 운영 상태 (실패 분석)
+          - 스케줄이 등록되어 있으면 기본 펼침 상태
           ======================================== */}
       <Box sx={{ mb: 3 }}>
-        <Typography
-          variant="h3"
-          sx={{
-            fontSize: '1rem',
-            fontWeight: 700,
-            mb: 2,
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            color: 'text.primary',
-          }}
-        >
-          <TrendingUp sx={{ fontSize: 20, color: 'primary.main' }} />
-          오늘 작업 현황
-        </Typography>
         <JobSummaryCards
           data={data.jobSummary}
+          recentResults={{
+            items: data.recentResults?.items ?? [],
+            total: data.recentResults?.total ?? 0,
+          }}
+          failureSummary={{
+            topCategories: data.failureSummary?.topCategories ?? [],
+            totalFailures: data.failureSummary?.totalFailures ?? 0,
+            period: data.failureSummary?.period ?? 'TODAY',
+          }}
           loading={loading.jobSummary}
+          recentResultsLoading={loading.recentResults}
+          failureSummaryLoading={loading.failureSummary}
           onJobClick={handleJobClick}
+          onRetry={handleRetry}
+          onViewLog={handleViewLog}
+          onResultFilterChange={handleResultFilterChange}
+          defaultExpanded={data.onboarding.hasSchedule}
         />
       </Box>
-
-      {/* ========================================
-          섹션 4: 최근 결과 & 인사이트 카드 (핵심)
-          - 좌: 최근 결과 리스트
-          - 우: 인사이트 카드 (상태 기반)
-          ======================================== */}
-      <Grid container spacing={2.5} sx={{ mb: 3 }}>
-        {/* 최근 게시 결과 */}
-        <Grid item xs={12} lg={8}>
-          <RecentResultsList
-            items={data.recentResults?.items ?? []}
-            total={data.recentResults?.total ?? 0}
-            loading={loading.recentResults}
-            onRetry={handleRetry}
-            onViewLog={handleViewLog}
-            onFilterChange={handleResultFilterChange}
-          />
-        </Grid>
-
-        {/* 인사이트 카드 (실패 분석 / 축하) */}
-        <Grid item xs={12} lg={4}>
-          <FailureSummary
-            topCategories={data.failureSummary?.topCategories ?? []}
-            totalFailures={data.failureSummary?.totalFailures ?? 0}
-            period={data.failureSummary?.period ?? 'TODAY'}
-            loading={loading.failureSummary}
-            onViewJob={handleViewLog}
-          />
-        </Grid>
-      </Grid>
 
       {/* ========================================
           섹션 5: 오늘 예정 + 다음 실행 (컴팩트)

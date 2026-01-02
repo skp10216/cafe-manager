@@ -44,18 +44,26 @@ interface GlobalRunOverviewProps {
 }
 
 /**
- * 컴팩트 KPI 카드 - Linear 스타일
+ * 프리미엄 KPI 카드 - 2줄 라벨 지원
+ * 
+ * 명확한 컨텍스트 전달을 위해:
+ * - categoryLabel: 대상/주체 (예: "스케줄", "게시글")
+ * - statusLabel: 상태 (예: "실행중", "작성 완료")
  */
 function CompactKPICard({
   icon: Icon,
-  label,
+  categoryLabel,
+  statusLabel,
   value,
   subLabel,
   accentColor,
   pulse = false,
 }: {
   icon: typeof PlayCircle;
-  label: string;
+  /** 대상/주체를 나타내는 라벨 (예: "스케줄", "게시글") */
+  categoryLabel: string;
+  /** 상태를 나타내는 라벨 (예: "실행중", "작성 완료") */
+  statusLabel: string;
   value: string | number;
   subLabel?: string;
   accentColor: string;
@@ -68,27 +76,30 @@ function CompactKPICard({
         display: 'flex',
         alignItems: 'center',
         gap: 1.5,
-        height: { xs: 72, sm: 76 },
+        height: { xs: 80, sm: 84 },
         px: { xs: 1.5, sm: 2 },
         py: 1.5,
-        borderRadius: 2,
-        backgroundColor: alpha(accentColor, 0.03),
+        borderRadius: 2.5,
+        backgroundColor: alpha(accentColor, 0.02),
         border: '1px solid',
-        borderColor: alpha(accentColor, 0.12),
+        borderColor: alpha(accentColor, 0.15),
         overflow: 'hidden',
-        transition: 'all 0.15s ease',
+        transition: 'all 0.2s ease',
+        // 좌측 악센트 바
         '&::before': {
           content: '""',
           position: 'absolute',
           left: 0,
           top: 0,
           bottom: 0,
-          width: 3,
-          backgroundColor: accentColor,
+          width: 4,
+          background: `linear-gradient(180deg, ${accentColor} 0%, ${alpha(accentColor, 0.6)} 100%)`,
         },
         '&:hover': {
           backgroundColor: alpha(accentColor, 0.05),
-          borderColor: alpha(accentColor, 0.2),
+          borderColor: alpha(accentColor, 0.25),
+          transform: 'translateY(-1px)',
+          boxShadow: `0 4px 12px ${alpha(accentColor, 0.1)}`,
         },
       }}
     >
@@ -98,21 +109,23 @@ function CompactKPICard({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          width: { xs: 34, sm: 38 },
-          height: { xs: 34, sm: 38 },
-          borderRadius: 1.5,
-          backgroundColor: alpha(accentColor, 0.08),
+          width: { xs: 40, sm: 44 },
+          height: { xs: 40, sm: 44 },
+          borderRadius: 2,
+          background: `linear-gradient(135deg, ${alpha(accentColor, 0.12)} 0%, ${alpha(accentColor, 0.06)} 100%)`,
+          border: `1px solid ${alpha(accentColor, 0.1)}`,
           flexShrink: 0,
         }}
       >
         <Icon
           sx={{
-            fontSize: { xs: 18, sm: 20 },
+            fontSize: { xs: 20, sm: 22 },
             color: accentColor,
+            filter: `drop-shadow(0 1px 2px ${alpha(accentColor, 0.3)})`,
             animation: pulse ? 'kpiPulse 1.5s ease-in-out infinite' : 'none',
             '@keyframes kpiPulse': {
-              '0%, 100%': { opacity: 1 },
-              '50%': { opacity: 0.4 },
+              '0%, 100%': { opacity: 1, transform: 'scale(1)' },
+              '50%': { opacity: 0.6, transform: 'scale(0.95)' },
             },
           }}
         />
@@ -120,10 +133,37 @@ function CompactKPICard({
 
       {/* 텍스트 영역 */}
       <Box sx={{ flex: 1, minWidth: 0 }}>
-        {/* 라벨 */}
-        <Typography sx={{ ...typography.label, mb: 0.25 }}>
-          {label}
-        </Typography>
+        {/* 2줄 라벨: 카테고리 + 상태 */}
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, mb: 0.5 }}>
+          {/* 카테고리 라벨 (주체) */}
+          <Typography
+            sx={{
+              fontSize: '0.65rem',
+              fontWeight: 600,
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+              color: accentColor,
+              backgroundColor: alpha(accentColor, 0.08),
+              px: 0.75,
+              py: 0.25,
+              borderRadius: 0.75,
+              lineHeight: 1.2,
+            }}
+          >
+            {categoryLabel}
+          </Typography>
+          {/* 상태 라벨 */}
+          <Typography
+            sx={{
+              fontSize: '0.7rem',
+              fontWeight: 500,
+              color: 'text.secondary',
+              lineHeight: 1.2,
+            }}
+          >
+            {statusLabel}
+          </Typography>
+        </Box>
         
         {/* 값 */}
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 0.75 }}>
@@ -131,12 +171,19 @@ function CompactKPICard({
             sx={{
               ...typography.kpiNumberMedium,
               color: accentColor,
+              textShadow: `0 1px 2px ${alpha(accentColor, 0.15)}`,
             }}
           >
             {value}
           </Typography>
           {subLabel && (
-            <Typography sx={{ ...typography.helper, fontSize: '0.7rem' }}>
+            <Typography 
+              sx={{ 
+                ...typography.helper, 
+                fontSize: '0.7rem',
+                color: 'text.disabled',
+              }}
+            >
               {subLabel}
             </Typography>
           )}
@@ -239,39 +286,44 @@ export default function GlobalRunOverview({
             mb: 2,
           }}
         >
-          {/* KPI 1: 실행중 */}
+          {/* KPI 1: 스케줄 실행중 */}
           <CompactKPICard
             icon={PlayCircle}
-            label="실행중"
+            categoryLabel="스케줄"
+            statusLabel="실행중"
             value={runningCount}
             subLabel={computed.queuedCount > 0 ? `+${computed.queuedCount} 대기` : undefined}
             accentColor={runningCount > 0 ? colors.running : colors.queued}
             pulse={runningCount > 0}
           />
 
-          {/* KPI 2: 성공 */}
+          {/* KPI 2: 게시글 작성 완료 */}
           <CompactKPICard
             icon={CheckCircle}
-            label="성공"
+            categoryLabel="게시글"
+            statusLabel="작성 완료"
             value={totalSuccess}
+            subLabel={totalFailed > 0 ? `실패 ${totalFailed}` : undefined}
             accentColor={colors.success}
           />
 
-          {/* KPI 3: 전체 진행 */}
+          {/* KPI 3: 전체 진행률 */}
           <CompactKPICard
             icon={Speed}
-            label="전체 진행"
+            categoryLabel="전체"
+            statusLabel="진행률"
             value={totalTarget > 0 ? `${computed.progress}%` : '-'}
-            subLabel={totalTarget > 0 ? `${totalProcessed}/${totalTarget}` : undefined}
+            subLabel={totalTarget > 0 ? `${totalProcessed}/${totalTarget}건` : undefined}
             accentColor={colors.running}
           />
 
-          {/* KPI 4: 성공률 */}
+          {/* KPI 4: 게시 성공률 */}
           <CompactKPICard
             icon={TrendingUp}
-            label="성공률"
+            categoryLabel="게시"
+            statusLabel="성공률"
             value={totalProcessed > 0 ? `${computed.successRate}%` : '-'}
-            subLabel={totalFailed > 0 ? `실패 ${totalFailed}` : undefined}
+            subLabel={totalProcessed > 0 ? `${totalProcessed}건 중` : undefined}
             accentColor={getSuccessRateColor(computed.successRate)}
           />
         </Box>

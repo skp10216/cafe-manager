@@ -426,9 +426,12 @@ export default function ScheduleDetailPage() {
             throw runError;
           }
         }
+      } else {
+        toast.success('스케줄이 저장되었습니다!');
       }
 
-      router.push('/schedules');
+      // 저장 성공 시 대시보드로 이동
+      router.push('/');
     } catch (err) {
       if (err instanceof ApiError) {
         setError(err.message);
