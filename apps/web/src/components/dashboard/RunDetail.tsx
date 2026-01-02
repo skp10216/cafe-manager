@@ -398,7 +398,8 @@ function formatElapsedTime(startedAt: string | null, updatedAt: string, isComple
 // ============================================
 
 function TimelineTab({ run }: { run: ScheduleRunInfo }) {
-  const events = run.recentEvents.slice(0, 15);
+  // 타임라인에 최근 3개 항목만 표시
+  const events = run.recentEvents.slice(0, 3);
 
   if (events.length === 0) {
     return (
