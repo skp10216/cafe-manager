@@ -1,21 +1,24 @@
 'use client';
 
 /**
- * 섹션 B: Next Run 카드 컴포넌트
- * 컴팩트 프리미엄 디자인 - 다음 실행 예정 스케줄 표시
+ * 섹션 B: Next Run 카드 컴포넌트 - Premium Edition v2
+ * 
+ * Linear/Notion 스타일 콘솔 감성:
+ * - 타이포그래피 토큰 적용
+ * - 담백하고 전문적인 UI
  */
 
 import { Box, Typography, Paper, Skeleton, Chip, IconButton, Avatar, Button, alpha } from '@mui/material';
 import {
-  Schedule,
   PlayArrow,
   Edit,
   AccessTime,
   Timer,
+  Add,
 } from '@mui/icons-material';
 import { useRouter } from 'next/navigation';
+import { typography, colors } from '@/lib/typography';
 
-/** Next Run 아이템 */
 export interface NextRunItem {
   scheduleId: string;
   scheduleName: string;
@@ -27,17 +30,12 @@ export interface NextRunItem {
 }
 
 interface NextRunCardsProps {
-  /** Next Run 아이템들 */
   items: NextRunItem[];
-  /** 로딩 상태 */
   loading?: boolean;
-  /** 지금 실행 핸들러 */
   onRunNow?: (scheduleId: string) => void;
-  /** 편집 핸들러 */
   onEdit?: (scheduleId: string) => void;
 }
 
-/** 남은 시간 포맷 */
 function formatRemainingTime(minutes: number): string {
   if (minutes < 1) return '곧 실행';
   if (minutes < 60) return `${minutes}분 후`;
@@ -50,7 +48,6 @@ function formatRemainingTime(minutes: number): string {
   return `${days}일 후`;
 }
 
-/** 실행 시간 포맷 */
 function formatRunTime(dateString: string): string {
   const date = new Date(dateString);
   return date.toLocaleTimeString('ko-KR', {
@@ -67,22 +64,21 @@ export default function NextRunCards({
 }: NextRunCardsProps) {
   const router = useRouter();
 
-  // 로딩 상태
   if (loading) {
     return (
       <Paper
         elevation={0}
         sx={{
-          p: 2.5,
+          p: 2,
           borderRadius: 2.5,
           border: '1px solid',
           borderColor: 'divider',
           height: '100%',
         }}
       >
-        <Skeleton width="50%" height={24} sx={{ mb: 2 }} />
+        <Skeleton width="40%" height={20} sx={{ mb: 2 }} />
         {[1, 2, 3].map((i) => (
-          <Skeleton key={i} variant="rounded" height={64} sx={{ mb: 1 }} />
+          <Skeleton key={i} variant="rounded" height={56} sx={{ mb: 1, borderRadius: 2 }} />
         ))}
       </Paper>
     );
@@ -94,38 +90,47 @@ export default function NextRunCards({
       <Paper
         elevation={0}
         sx={{
-          p: 3,
+          p: 2,
           borderRadius: 2.5,
-          border: '1px solid',
+          border: '1px dashed',
           borderColor: 'divider',
-          textAlign: 'center',
-          height: '100%',
+          backgroundColor: alpha('#000', 0.01),
           display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'center',
+          justifyContent: 'space-between',
+          gap: 2,
         }}
       >
-        <Avatar
-          sx={{
-            width: 56,
-            height: 56,
-            mb: 2,
-            backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.1),
-          }}
-        >
-          <Timer sx={{ fontSize: 28, color: 'warning.main' }} />
-        </Avatar>
-        <Typography variant="body1" sx={{ fontWeight: 600, mb: 0.5 }}>
-          예정된 자동 게시가 없습니다
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          스케줄을 설정하면 자동으로 게시됩니다
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+          <Avatar
+            sx={{
+              width: 38,
+              height: 38,
+              backgroundColor: alpha(colors.warning, 0.08),
+            }}
+          >
+            <Timer sx={{ fontSize: 20, color: colors.warning }} />
+          </Avatar>
+          <Box>
+            <Typography sx={{ ...typography.cardTitle, mb: 0.125 }}>
+              예정된 자동 게시가 없습니다
+            </Typography>
+            <Typography sx={{ ...typography.helper }}>
+              스케줄을 설정하면 자동으로 게시됩니다
+            </Typography>
+          </Box>
+        </Box>
         <Button
           variant="outlined"
           size="small"
+          startIcon={<Add sx={{ fontSize: 16 }} />}
           onClick={() => router.push('/schedules/new')}
+          sx={{ 
+            flexShrink: 0, 
+            ...typography.chip,
+            height: 32,
+            borderRadius: 1.5,
+          }}
         >
           스케줄 만들기
         </Button>
@@ -149,34 +154,31 @@ export default function NextRunCards({
       {/* 헤더 */}
       <Box
         sx={{
-          px: 2.5,
-          py: 2,
+          px: 2,
+          py: 1.5,
           borderBottom: '1px solid',
           borderColor: 'divider',
           display: 'flex',
           alignItems: 'center',
-          justifyContent: 'space-between',
-          backgroundColor: (theme) => alpha(theme.palette.background.paper, 0.8),
+          gap: 1.25,
         }}
       >
-        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-          <Avatar
-            sx={{
-              width: 32,
-              height: 32,
-              backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.1),
-            }}
-          >
-            <Timer sx={{ fontSize: 18, color: 'warning.main' }} />
-          </Avatar>
-          <Box>
-            <Typography variant="body1" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
-              다음 실행
-            </Typography>
-            <Typography variant="caption" color="text.secondary">
-              예정된 자동 게시
-            </Typography>
-          </Box>
+        <Avatar
+          sx={{
+            width: 32,
+            height: 32,
+            backgroundColor: alpha(colors.warning, 0.08),
+          }}
+        >
+          <Timer sx={{ fontSize: 18, color: colors.warning }} />
+        </Avatar>
+        <Box>
+          <Typography sx={{ ...typography.sectionTitle, lineHeight: 1.2 }}>
+            다음 실행
+          </Typography>
+          <Typography sx={{ ...typography.helper, fontSize: '0.65rem' }}>
+            예정된 자동 게시
+          </Typography>
         </Box>
       </Box>
 
@@ -184,41 +186,39 @@ export default function NextRunCards({
       <Box sx={{ flex: 1, overflow: 'auto' }}>
         {items.slice(0, 3).map((item, index) => {
           const isUrgent = item.remainingMinutes < 30;
-          
+
           return (
             <Box
               key={item.scheduleId}
               sx={{
                 display: 'flex',
                 alignItems: 'center',
-                gap: 2,
-                px: 2.5,
-                py: 2,
+                gap: 1.5,
+                px: 2,
+                py: 1.5,
                 borderBottom: index < Math.min(items.length, 3) - 1 ? '1px solid' : 'none',
                 borderColor: 'divider',
-                transition: 'background-color 0.15s ease',
-                backgroundColor: index === 0 
-                  ? (theme) => alpha(theme.palette.primary.main, 0.03) 
-                  : 'transparent',
+                transition: 'background-color 0.12s ease',
+                backgroundColor: index === 0 ? alpha(colors.running, 0.02) : 'transparent',
                 '&:hover': {
-                  backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.5),
+                  backgroundColor: alpha('#000', 0.02),
                 },
               }}
             >
               {/* 순번 */}
               <Box
                 sx={{
-                  width: 28,
-                  height: 28,
-                  borderRadius: '50%',
+                  width: 26,
+                  height: 26,
+                  borderRadius: 1.25,
                   display: 'flex',
                   alignItems: 'center',
                   justifyContent: 'center',
-                  fontSize: '0.75rem',
-                  fontWeight: 700,
                   flexShrink: 0,
-                  backgroundColor: index === 0 ? 'primary.main' : 'action.hover',
+                  backgroundColor: index === 0 ? colors.running : alpha('#000', 0.04),
                   color: index === 0 ? 'white' : 'text.secondary',
+                  ...typography.chip,
+                  fontVariantNumeric: 'tabular-nums',
                 }}
               >
                 {index + 1}
@@ -227,45 +227,43 @@ export default function NextRunCards({
               {/* 내용 */}
               <Box sx={{ flex: 1, minWidth: 0 }}>
                 <Typography
-                  variant="body2"
                   sx={{
-                    fontWeight: 600,
+                    ...typography.cardTitle,
+                    fontSize: '0.85rem',
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
-                    mb: 0.25,
+                    mb: 0.125,
                   }}
                 >
                   {item.scheduleName}
                 </Typography>
                 <Typography
-                  variant="caption"
-                  color="text.secondary"
                   sx={{
+                    ...typography.timestamp,
                     display: 'flex',
                     alignItems: 'center',
                     gap: 0.5,
                   }}
                 >
-                  <AccessTime sx={{ fontSize: 12 }} />
+                  <AccessTime sx={{ fontSize: 11 }} />
                   {formatRunTime(item.nextRunAt)} · {item.cafeName}
                 </Typography>
               </Box>
 
               {/* 남은 시간 + 액션 */}
-              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexShrink: 0 }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.75, flexShrink: 0 }}>
                 <Chip
-                  label={formatRemainingTime(item.remainingMinutes)}
+                  label={
+                    <Typography sx={{ ...typography.chip, fontVariantNumeric: 'tabular-nums' }}>
+                      {formatRemainingTime(item.remainingMinutes)}
+                    </Typography>
+                  }
                   size="small"
-                  color={isUrgent ? 'warning' : 'default'}
                   sx={{
-                    fontWeight: 600,
                     height: 24,
-                    fontSize: 11,
-                    backgroundColor: isUrgent 
-                      ? (theme) => alpha(theme.palette.warning.main, 0.15)
-                      : 'action.hover',
-                    color: isUrgent ? 'warning.dark' : 'text.secondary',
+                    backgroundColor: isUrgent ? alpha(colors.warning, 0.1) : alpha('#000', 0.04),
+                    color: isUrgent ? colors.warning : 'text.secondary',
                     border: 'none',
                   }}
                 />
@@ -273,22 +271,26 @@ export default function NextRunCards({
                   <IconButton
                     size="small"
                     onClick={() => onEdit?.(item.scheduleId)}
-                    sx={{ 
-                      color: 'text.secondary',
-                      '&:hover': { color: 'primary.main' },
+                    sx={{
+                      width: 26,
+                      height: 26,
+                      color: 'text.disabled',
+                      '&:hover': { color: colors.running },
                     }}
                   >
-                    <Edit sx={{ fontSize: 16 }} />
+                    <Edit sx={{ fontSize: 14 }} />
                   </IconButton>
                   <IconButton
                     size="small"
                     onClick={() => onRunNow?.(item.scheduleId)}
-                    sx={{ 
-                      color: 'primary.main',
-                      '&:hover': { backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.1) },
+                    sx={{
+                      width: 26,
+                      height: 26,
+                      color: colors.running,
+                      '&:hover': { backgroundColor: alpha(colors.running, 0.08) },
                     }}
                   >
-                    <PlayArrow sx={{ fontSize: 18 }} />
+                    <PlayArrow sx={{ fontSize: 16 }} />
                   </IconButton>
                 </Box>
               </Box>
@@ -299,5 +301,3 @@ export default function NextRunCards({
     </Paper>
   );
 }
-
-

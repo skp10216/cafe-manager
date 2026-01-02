@@ -305,14 +305,43 @@ export class ScheduleRunner {
       return;
     }
 
-    // ScheduleRun 조회 또는 생성 (오늘 날짜 기준)
-    let run = await this.scheduleRunService.findByScheduleAndDate(
-      scheduleId,
-      todayStart,
+    // [FIX] ScheduleRun 조회: RUNNING 상태 우선 찾기 (날짜 불일치 방지)
+    // 문제: 동일 스케줄에 대해 runDate가 다른 여러 ScheduleRun이 생성되는 버그
+    // 해결: RUNNING 상태인 기존 ScheduleRun이 있으면 재사용
+    let run = await this.prisma.scheduleRun.findFirst({
+      where: {
+        scheduleId,
+        status: 'RUNNING',
+      },
+      orderBy: { triggeredAt: 'desc' },
+    });
+
+    // RUNNING이 없으면 오늘 날짜로 조회
+    if (!run) {
+      run = await this.scheduleRunService.findByScheduleAndDate(
+        scheduleId,
+        todayStart,
+      );
+    }
+
+    // #region agent log
+    this.logger.debug(
+      `[DEBUG:processSchedule:FIND_RUN] scheduleId=${scheduleId}, ` +
+      `existingRunId=${run?.id || 'null'}, existingStatus=${run?.status || 'null'}, ` +
+      `totalJobs=${run?.totalJobs || 0}, ` +
+      `findMethod=${run?.status === 'RUNNING' ? 'RUNNING_FIRST' : 'DATE_LOOKUP'}`
     );
+    // #endregion
 
     if (!run || run.status === 'BLOCKED' || run.status === 'SKIPPED') {
       // 새로 생성하거나 BLOCKED/SKIPPED 상태 업데이트
+      // #region agent log
+      this.logger.debug(
+        `[DEBUG:processSchedule:CREATE_RUN] scheduleId=${scheduleId}, ` +
+        `reason=${!run ? 'no_existing' : run.status}`
+      );
+      // #endregion
+
       run = await this.scheduleRunService.createOrUpdate({
         scheduleId,
         userId,
@@ -323,6 +352,12 @@ export class ScheduleRunner {
       });
 
       if (!run) {
+        // #region agent log
+        this.logger.error(
+          `[DEBUG:processSchedule:CREATE_FAILED] scheduleId=${scheduleId}, ` +
+          `createOrUpdate returned null - 기존 RUNNING 상태 존재 가능성!`
+        );
+        // #endregion
         this.logger.warn(`스케줄 ${scheduleId}: ScheduleRun 생성 실패`);
         return;
       }
@@ -331,6 +366,12 @@ export class ScheduleRunner {
       await this.scheduleRunService.update(run.id, {
         totalJobs: schedule.dailyPostCount,
       });
+
+      // #region agent log
+      this.logger.debug(
+        `[DEBUG:processSchedule:RUN_CREATED] runId=${run.id}, totalJobs=${schedule.dailyPostCount}`
+      );
+      // #endregion
     }
 
     // 1개 Job 생성 (freshSchedule의 최신 카운트 사용)
@@ -360,18 +401,22 @@ export class ScheduleRunner {
   }
 
   /**
-   * 3조건 실행 가능 여부 체크
+   * 실행 가능 여부 체크
+   * 
+   * [변경] 세션 문제는 BLOCKED 조건에서 제외
+   * - 세션 문제(SESSION_ERROR/EXPIRED)는 Worker에서 재연결 시도 후 처리
+   * - ScheduleRun이 중단되지 않고, Job 단위로 성공/실패 처리
    * 
    * 조건 1: userEnabled = true
    * 조건 2: adminStatus = APPROVED
-   * 조건 3: 사용자의 네이버 세션이 HEALTHY
+   * (조건 3: sessionHealthy - 참고용으로만 기록, BLOCKED 조건 아님)
    */
   private checkExecutability(schedule: any): ExecutabilityCheck {
     const userEnabled = schedule.userEnabled;
     const adminStatus: AdminStatus = schedule.adminStatus;
     const adminApproved = adminStatus === 'APPROVED';
 
-    // 사용자의 활성 세션 찾기
+    // 사용자의 활성 세션 찾기 (참고용)
     const sessions = schedule.user?.naverAccounts
       ?.flatMap((account: any) => account.sessions)
       ?.filter((s: any) => s) ?? [];
@@ -383,6 +428,7 @@ export class ScheduleRunner {
     const sessionHealthy = sessionStatus === 'HEALTHY' || sessionStatus === 'EXPIRING';
 
     // 차단 사유 결정 (우선순위 순)
+    // [변경] 세션 문제(SESSION_*)는 BLOCKED 조건에서 제외 → Worker에서 처리
     let blockCode: BlockCode | null = null;
     let blockMessage: string | null = null;
 
@@ -394,24 +440,35 @@ export class ScheduleRunner {
       blockCode = 'ADMIN_SUSPENDED';
     } else if (adminStatus === 'BANNED') {
       blockCode = 'ADMIN_BANNED';
-    } else if (!healthySession) {
-      // 세션이 없거나 모두 비정상
-      const anySession = sessions[0];
-      if (anySession?.status === 'EXPIRED') {
-        blockCode = 'SESSION_EXPIRED';
-      } else if (anySession?.status === 'CHALLENGE_REQUIRED') {
-        blockCode = 'SESSION_CHALLENGE';
-      } else {
-        blockCode = 'SESSION_ERROR';
-      }
     }
+    // [제거] 세션 문제는 더 이상 BLOCKED 조건이 아님
+    // Worker에서 세션 재연결을 시도하고, 실패하면 해당 Job만 실패 처리
 
     if (blockCode) {
       blockMessage = BLOCK_CODE_MESSAGES[blockCode];
     }
 
+    // 세션 상태 로깅 (경고용)
+    if (!sessionHealthy && !blockCode) {
+      this.logger.warn(
+        `[checkExecutability] scheduleId=${schedule.id}: 세션 상태 비정상 (status=${sessions[0]?.status}), ` +
+        `Worker에서 재연결 시도 예정`
+      );
+    }
+
+    // #region agent log
+    this.logger.debug(
+      `[DEBUG:checkExecutability] scheduleId=${schedule.id}, ` +
+      `userEnabled=${userEnabled}, adminApproved=${adminApproved}, sessionHealthy=${sessionHealthy}, ` +
+      `blockCode=${blockCode}, sessionsCount=${sessions.length}, ` +
+      `sessionStatuses=${JSON.stringify(sessions.map((s:any)=>({id:s.id,status:s.status,lastVerifiedAt:s.lastVerifiedAt})))}`
+    );
+    // #endregion
+
+    // [변경] canExecute에서 sessionHealthy 조건 제거
+    // 세션 문제는 Worker에서 처리하므로, 사용자/관리자 조건만 체크
     return {
-      canExecute: userEnabled && adminApproved && sessionHealthy,
+      canExecute: userEnabled && adminApproved,
       userEnabled,
       adminApproved,
       sessionHealthy,
@@ -435,19 +492,61 @@ export class ScheduleRunner {
     // 차단 상태 결정 (사용자 비활성화 = SKIPPED, 그 외 = BLOCKED)
     const status: RunStatus = blockCode === 'USER_DISABLED' ? 'SKIPPED' : 'BLOCKED';
 
+    // #region agent log
+    this.logger.warn(
+      `[DEBUG:handleBlockedSchedule:ENTRY] scheduleId=${schedule.id}, ` +
+      `targetStatus=${status}, blockCode=${blockCode}, blockMessage=${blockMessage}`
+    );
+    // #endregion
+
     this.logger.debug(
       `스케줄 ${schedule.id} ${status}: ${blockMessage} (code=${blockCode})`
     );
 
-    // ScheduleRun 생성/업데이트 (차단/스킵 기록)
-    await this.scheduleRunService.createOrUpdate({
-      scheduleId: schedule.id,
-      userId: schedule.userId,
-      runDate: todayStart,
-      status,
-      blockCode,
-      blockReason: blockMessage,
+    // [FIX] 기존 RUNNING ScheduleRun 찾기 (날짜 불일치 방지)
+    // 세션 만료 등으로 차단될 때, 기존 RUNNING을 BLOCKED로 업데이트해야 함
+    const existingRunning = await this.prisma.scheduleRun.findFirst({
+      where: {
+        scheduleId: schedule.id,
+        status: 'RUNNING',
+      },
+      orderBy: { triggeredAt: 'desc' },
     });
+
+    let result;
+    if (existingRunning) {
+      // 기존 RUNNING ScheduleRun을 BLOCKED/SKIPPED로 업데이트
+      this.logger.debug(
+        `[handleBlockedSchedule] 기존 RUNNING ScheduleRun 발견: ${existingRunning.id} → ${status}로 업데이트`
+      );
+      result = await this.prisma.scheduleRun.update({
+        where: { id: existingRunning.id },
+        data: {
+          status,
+          blockCode,
+          blockReason: blockMessage,
+          finishedAt: new Date(),
+        },
+      });
+    } else {
+      // RUNNING이 없으면 기존 로직대로 생성/업데이트
+      result = await this.scheduleRunService.createOrUpdate({
+        scheduleId: schedule.id,
+        userId: schedule.userId,
+        runDate: todayStart,
+        status,
+        blockCode,
+        blockReason: blockMessage,
+      });
+    }
+
+    // #region agent log
+    this.logger.warn(
+      `[DEBUG:handleBlockedSchedule:RESULT] scheduleId=${schedule.id}, ` +
+      `existingRunning=${existingRunning?.id || 'null'}, ` +
+      `result=${result ? 'SUCCESS(id='+result.id+')' : 'NULL'}`
+    );
+    // #endregion
 
     // nextPostAt을 다음 간격으로 업데이트 (계속 차단되면 계속 시도하지 않도록)
     await this.updateNextPostAt(schedule, now);

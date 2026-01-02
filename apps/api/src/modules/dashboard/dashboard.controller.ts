@@ -21,6 +21,8 @@ import type {
   NextRunResponse,
   FailureSummaryResponse,
   RecentResultsResponse,
+  ActiveRunResponse,
+  ActiveRunsResponse,
 } from './dto';
 
 @Controller('dashboard')
@@ -98,6 +100,34 @@ export class DashboardController {
       Math.min(limit, 50),
       filter || 'ALL'
     );
+  }
+
+  /**
+   * 현재 실행 중인 Run 조회 (폴링용, 레거시 - 단일)
+   * GET /api/dashboard/active-run
+   * 
+   * @deprecated 다중 스케줄 지원을 위해 /active-runs 사용 권장
+   */
+  @Get('active-run')
+  async getActiveRun(
+    @CurrentUser() user: RequestUser
+  ): Promise<ActiveRunResponse> {
+    return this.dashboardService.getActiveRun(user.userId);
+  }
+
+  /**
+   * 현재 실행 중인 모든 Run 조회 (폴링용, 복수)
+   * GET /api/dashboard/active-runs
+   * 
+   * 대시보드에서 2~5초 폴링으로 호출하여 다중 스케줄 진행 상황 표시
+   * - 모든 RUNNING/QUEUED 상태의 run 반환
+   * - 최근 30초 이내 완료된 run도 포함 (깜빡임 방지)
+   */
+  @Get('active-runs')
+  async getActiveRuns(
+    @CurrentUser() user: RequestUser
+  ): Promise<ActiveRunsResponse> {
+    return this.dashboardService.getActiveRuns(user.userId);
   }
 }
 

@@ -1,8 +1,12 @@
 'use client';
 
 /**
- * 섹션 D: 실패 요약 컴포넌트
- * 컴팩트 프리미엄 디자인 - 실패 원인 카테고리별 요약
+ * 인사이트 카드 (구 FailureSummary) - Premium Edition
+ * 
+ * 상태 기반 인사이트 카드:
+ * - 실패 0: "오늘 모든 작업이 정상 완료" (축하/신뢰)
+ * - 실패 있음: "실패 n건이 있습니다" + CTA
+ * - 실패 원인 분석 표시
  */
 
 import {
@@ -15,6 +19,8 @@ import {
   Tooltip,
   Avatar,
   alpha,
+  Button,
+  Stack,
 } from '@mui/material';
 import {
   Login,
@@ -26,8 +32,11 @@ import {
   Timer,
   HelpOutline,
   OpenInNew,
-  BugReport,
   Celebration,
+  Warning,
+  CheckCircle,
+  TrendingUp,
+  Shield,
 } from '@mui/icons-material';
 import { useRouter } from 'next/navigation';
 
@@ -96,6 +105,7 @@ export default function FailureSummary({
   onViewJob,
 }: FailureSummaryProps) {
   const router = useRouter();
+  const periodText = period === 'TODAY' ? '오늘' : '이번 주';
 
   // 로딩 상태
   if (loading) {
@@ -104,67 +114,142 @@ export default function FailureSummary({
         elevation={0}
         sx={{
           p: 2.5,
-          borderRadius: 2.5,
+          borderRadius: 3,
           border: '1px solid',
           borderColor: 'divider',
+          height: '100%',
         }}
       >
-        <Skeleton width="50%" height={24} sx={{ mb: 2 }} />
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 2 }}>
+          <Skeleton variant="circular" width={40} height={40} />
+          <Box sx={{ flex: 1 }}>
+            <Skeleton width="60%" height={20} />
+            <Skeleton width="40%" height={16} />
+          </Box>
+        </Box>
         {[1, 2, 3].map((i) => (
           <Box key={i} sx={{ mb: 2 }}>
             <Skeleton width="60%" height={16} sx={{ mb: 0.5 }} />
-            <Skeleton variant="rounded" height={6} />
+            <Skeleton variant="rounded" height={6} sx={{ borderRadius: 1 }} />
           </Box>
         ))}
       </Paper>
     );
   }
 
-  // 빈 상태 (실패 없음 - 축하!)
-  if (topCategories.length === 0) {
+  // ========================================
+  // 상태 A: 실패 없음 - 축하/신뢰 카드
+  // ========================================
+  if (totalFailures === 0) {
     return (
       <Paper
         elevation={0}
         sx={{
-          p: 3,
-          borderRadius: 2.5,
-          border: '1px solid',
-          borderColor: 'divider',
-          textAlign: 'center',
+          borderRadius: 3,
+          border: '2px solid',
+          borderColor: (theme) => alpha(theme.palette.success.main, 0.3),
+          background: (theme) =>
+            `linear-gradient(135deg, ${alpha(theme.palette.success.main, 0.08)} 0%, ${alpha(theme.palette.success.main, 0.02)} 100%)`,
+          overflow: 'hidden',
+          height: '100%',
+          display: 'flex',
+          flexDirection: 'column',
         }}
       >
-        <Avatar
+        {/* 헤더 */}
+        <Box
           sx={{
-            width: 48,
-            height: 48,
-            mb: 2,
-            mx: 'auto',
-            backgroundColor: (theme) => alpha(theme.palette.success.main, 0.1),
+            px: 2.5,
+            py: 2,
+            borderBottom: '1px solid',
+            borderColor: (theme) => alpha(theme.palette.success.main, 0.15),
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1.5,
           }}
         >
-          <Celebration sx={{ fontSize: 24, color: 'success.main' }} />
-        </Avatar>
-        <Typography variant="body1" sx={{ fontWeight: 600, mb: 0.5 }}>
-          실패 없음! 🎉
-        </Typography>
-        <Typography variant="body2" color="text.secondary">
-          {period === 'TODAY' ? '오늘' : '이번 주'} 모든 작업이 성공했습니다
-        </Typography>
+          <Avatar
+            sx={{
+              width: 40,
+              height: 40,
+              backgroundColor: (theme) => alpha(theme.palette.success.main, 0.15),
+            }}
+          >
+            <Shield sx={{ fontSize: 22, color: 'success.main' }} />
+          </Avatar>
+          <Box>
+            <Typography variant="body1" sx={{ fontWeight: 700, color: 'success.dark', lineHeight: 1.2 }}>
+              운영 상태
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              {periodText} 기준
+            </Typography>
+          </Box>
+        </Box>
+
+        {/* 축하 메시지 */}
+        <Box
+          sx={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            p: 3,
+            textAlign: 'center',
+          }}
+        >
+          <Avatar
+            sx={{
+              width: 64,
+              height: 64,
+              mb: 2,
+              backgroundColor: (theme) => alpha(theme.palette.success.main, 0.12),
+            }}
+          >
+            <Celebration sx={{ fontSize: 32, color: 'success.main' }} />
+          </Avatar>
+          <Typography
+            variant="h6"
+            sx={{
+              fontWeight: 700,
+              color: 'success.main',
+              mb: 0.5,
+            }}
+          >
+            실패 없음! 🎉
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            {periodText} 모든 작업이 성공적으로 완료되었습니다
+          </Typography>
+          <Stack direction="row" spacing={1} sx={{ alignItems: 'center' }}>
+            <CheckCircle sx={{ fontSize: 16, color: 'success.main' }} />
+            <Typography variant="caption" sx={{ fontWeight: 600, color: 'success.main' }}>
+              시스템 정상 작동 중
+            </Typography>
+          </Stack>
+        </Box>
       </Paper>
     );
   }
 
+  // ========================================
+  // 상태 B: 실패 있음 - 경고/분석 카드
+  // ========================================
   return (
     <Paper
       elevation={0}
       sx={{
-        borderRadius: 2.5,
-        border: '1px solid',
-        borderColor: 'divider',
+        borderRadius: 3,
+        border: '2px solid',
+        borderColor: (theme) => alpha(theme.palette.error.main, 0.25),
         overflow: 'hidden',
+        height: '100%',
+        display: 'flex',
+        flexDirection: 'column',
       }}
     >
-      {/* 헤더 */}
+      {/* 헤더 - 경고 스타일 */}
       <Box
         sx={{
           px: 2.5,
@@ -174,32 +259,61 @@ export default function FailureSummary({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'space-between',
-          backgroundColor: (theme) => alpha(theme.palette.error.main, 0.03),
+          backgroundColor: (theme) => alpha(theme.palette.error.main, 0.06),
         }}
       >
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Avatar
             sx={{
-              width: 32,
-              height: 32,
-              backgroundColor: (theme) => alpha(theme.palette.error.main, 0.1),
+              width: 40,
+              height: 40,
+              backgroundColor: (theme) => alpha(theme.palette.error.main, 0.12),
             }}
           >
-            <BugReport sx={{ fontSize: 18, color: 'error.main' }} />
+            <Warning sx={{ fontSize: 22, color: 'error.main' }} />
           </Avatar>
           <Box>
-            <Typography variant="body1" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
-              실패 분석
+            <Typography variant="body1" sx={{ fontWeight: 700, color: 'error.main', lineHeight: 1.2 }}>
+              실패 {totalFailures}건
             </Typography>
             <Typography variant="caption" color="text.secondary">
-              {period === 'TODAY' ? '오늘' : '이번 주'} {totalFailures}건
+              {periodText} · 확인이 필요합니다
             </Typography>
           </Box>
         </Box>
+        <Button
+          size="small"
+          variant="contained"
+          color="error"
+          onClick={() => router.push('/logs?status=FAILED')}
+          sx={{
+            fontWeight: 600,
+            fontSize: '0.75rem',
+            boxShadow: 'none',
+            '&:hover': { boxShadow: 'none' },
+          }}
+        >
+          실패 보기
+        </Button>
       </Box>
 
-      {/* 카테고리 리스트 - Top 4만 표시 */}
-      <Box sx={{ p: 2 }}>
+      {/* 실패 원인 분석 */}
+      <Box sx={{ flex: 1, p: 2.5 }}>
+        <Typography
+          variant="caption"
+          sx={{
+            display: 'block',
+            mb: 2,
+            fontWeight: 600,
+            color: 'text.secondary',
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+          }}
+        >
+          실패 원인 분석
+        </Typography>
+
+        {/* Top 카테고리 리스트 */}
         {topCategories.slice(0, 4).map((item, index) => {
           const Icon = CATEGORY_ICONS[item.category];
           const color = CATEGORY_COLORS[item.category];
@@ -222,25 +336,19 @@ export default function FailureSummary({
               >
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Icon sx={{ fontSize: 16, color }} />
-                  <Typography
-                    variant="caption"
-                    sx={{ fontWeight: 500, color: 'text.primary' }}
-                  >
+                  <Typography variant="caption" sx={{ fontWeight: 600, color: 'text.primary' }}>
                     {item.label}
                   </Typography>
                 </Box>
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                  <Typography
-                    variant="caption"
-                    sx={{ fontWeight: 600, color }}
-                  >
+                  <Typography variant="caption" sx={{ fontWeight: 700, color }}>
                     {item.count}건
                   </Typography>
                   <Tooltip title="로그 보기">
                     <IconButton
                       size="small"
                       onClick={() => onViewJob?.(item.latestJobId)}
-                      sx={{ 
+                      sx={{
                         p: 0.25,
                         '&:hover': { backgroundColor: alpha(color, 0.1) },
                       }}
@@ -258,7 +366,7 @@ export default function FailureSummary({
                 sx={{
                   height: 6,
                   borderRadius: 3,
-                  backgroundColor: alpha(color, 0.15),
+                  backgroundColor: alpha(color, 0.12),
                   '& .MuiLinearProgress-bar': {
                     backgroundColor: color,
                     borderRadius: 3,
@@ -273,15 +381,26 @@ export default function FailureSummary({
       {/* 팁 */}
       <Box
         sx={{
-          px: 2,
+          px: 2.5,
           py: 1.5,
           borderTop: '1px solid',
           borderColor: 'divider',
-          backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.3),
+          backgroundColor: (theme) => alpha(theme.palette.warning.main, 0.06),
         }}
       >
-        <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.5 }}>
-          💡 가장 많은 원인을 해결하면 성공률이 크게 올라갑니다
+        <Typography
+          variant="caption"
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 0.75,
+            color: 'warning.dark',
+            fontWeight: 500,
+            lineHeight: 1.5,
+          }}
+        >
+          <TrendingUp sx={{ fontSize: 14 }} />
+          가장 많은 원인을 해결하면 성공률이 크게 올라갑니다
         </Typography>
       </Box>
     </Paper>

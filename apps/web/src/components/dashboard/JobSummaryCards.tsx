@@ -1,18 +1,22 @@
 'use client';
 
 /**
- * 섹션 B: 작업 현황 카드 컴포넌트
- * 컴팩트 프리미엄 디자인 - 오늘 작업/완료/실패/진행중
+ * 섹션 B: 작업 현황 카드 컴포넌트 - Premium Edition v3
+ * 
+ * Linear/Notion 스타일 콘솔 감성:
+ * - KPI 숫자 tabular-nums 적용
+ * - 타이포그래피 토큰 적용
+ * - 담백하고 전문적인 UI
+ * - 성공/실패 2개 KPI만 표시 (시도/진행중 중복 제거)
  */
 
-import { Box, Typography, Paper, Skeleton, alpha } from '@mui/material';
+import { Box, Typography, Paper, Skeleton, alpha, Stack } from '@mui/material';
 import {
-  TrendingUp,
   CheckCircle,
   Error as ErrorIcon,
-  Sync,
 } from '@mui/icons-material';
 import { useRouter } from 'next/navigation';
+import { typography, colors } from '@/lib/typography';
 
 /** 카드 데이터 타입 */
 interface CardData {
@@ -37,49 +41,10 @@ interface JobSummaryData {
 }
 
 interface JobSummaryCardsProps {
-  /** 작업 요약 데이터 */
   data: JobSummaryData | null;
-  /** 로딩 상태 */
   loading?: boolean;
-  /** 작업 상세 클릭 핸들러 */
   onJobClick?: (jobId: string) => void;
 }
-
-/** 카드 타입별 설정 */
-const CARD_CONFIG = {
-  todayJobs: {
-    title: '오늘 작업',
-    icon: TrendingUp,
-    color: '#2563EB',
-    bgColor: '#EFF6FF',
-    gradient: 'linear-gradient(135deg, #3B82F6 0%, #2563EB 100%)',
-    filterParam: '',
-  },
-  completed: {
-    title: '완료',
-    icon: CheckCircle,
-    color: '#10B981',
-    bgColor: '#ECFDF5',
-    gradient: 'linear-gradient(135deg, #34D399 0%, #10B981 100%)',
-    filterParam: 'status=COMPLETED',
-  },
-  failed: {
-    title: '실패',
-    icon: ErrorIcon,
-    color: '#EF4444',
-    bgColor: '#FEF2F2',
-    gradient: 'linear-gradient(135deg, #F87171 0%, #EF4444 100%)',
-    filterParam: 'status=FAILED',
-  },
-  processing: {
-    title: '진행 중',
-    icon: Sync,
-    color: '#F59E0B',
-    bgColor: '#FFFBEB',
-    gradient: 'linear-gradient(135deg, #FBBF24 0%, #F59E0B 100%)',
-    filterParam: 'status=PROCESSING',
-  },
-};
 
 export default function JobSummaryCards({
   data,
@@ -88,163 +53,171 @@ export default function JobSummaryCards({
 }: JobSummaryCardsProps) {
   const router = useRouter();
 
-  // 카드 클릭 → 로그 페이지 이동
-  const handleCardClick = (cardType: keyof typeof CARD_CONFIG) => {
-    const config = CARD_CONFIG[cardType];
-    const url = config.filterParam ? `/logs?${config.filterParam}` : '/logs';
+  const handleCardClick = (filterParam: string) => {
+    const url = filterParam ? `/logs?${filterParam}` : '/logs';
     router.push(url);
   };
 
-  // 로딩 상태
   if (loading) {
     return (
-      <Box
-        sx={{
-          display: 'grid',
-          gridTemplateColumns: {
-            xs: 'repeat(2, 1fr)',
-            lg: 'repeat(4, 1fr)',
-          },
-          gap: 2,
-        }}
-      >
-        {[1, 2, 3, 4].map((i) => (
-          <Paper
-            key={i}
-            elevation={0}
-            sx={{
-              p: 2,
-              borderRadius: 2,
-              border: '1px solid',
-              borderColor: 'divider',
-            }}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5, mb: 1.5 }}>
-              <Skeleton variant="rounded" width={36} height={36} />
-              <Box sx={{ flex: 1 }}>
-                <Skeleton width="60%" height={16} />
-                <Skeleton width="40%" height={24} sx={{ mt: 0.5 }} />
-              </Box>
-            </Box>
-          </Paper>
-        ))}
-      </Box>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+        <Skeleton variant="rounded" height={100} sx={{ flex: 1, borderRadius: 2.5 }} />
+        <Skeleton variant="rounded" height={100} sx={{ flex: 1, borderRadius: 2.5 }} />
+      </Stack>
     );
   }
 
-  return (
-    <Box
-      sx={{
-        display: 'grid',
-        gridTemplateColumns: {
-          xs: 'repeat(2, 1fr)',
-          lg: 'repeat(4, 1fr)',
-        },
-        gap: 2,
-      }}
-    >
-      {(Object.keys(CARD_CONFIG) as Array<keyof typeof CARD_CONFIG>).map((cardType) => {
-        const config = CARD_CONFIG[cardType];
-        const cardData = data?.cards[cardType];
-        const Icon = config.icon;
-        const count = cardData?.count ?? 0;
+  const completedCount = data?.cards.completed?.count ?? 0;
+  const failedCount = data?.cards.failed?.count ?? 0;
 
-        return (
-          <Paper
-            key={cardType}
-            elevation={0}
-            sx={{
-              p: 2,
-              borderRadius: 2.5,
-              border: '1px solid',
-              borderColor: count > 0 ? alpha(config.color, 0.2) : 'divider',
-              backgroundColor: count > 0 ? alpha(config.color, 0.02) : 'background.paper',
-              cursor: 'pointer',
-              transition: 'all 0.2s ease',
-              position: 'relative',
-              overflow: 'hidden',
-              '&:hover': {
-                borderColor: config.color,
-                transform: 'translateY(-2px)',
-                boxShadow: `0 8px 24px ${alpha(config.color, 0.15)}`,
-              },
-              '&::before': count > 0 ? {
-                content: '""',
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                right: 0,
-                height: 3,
-                background: config.gradient,
-              } : {},
-            }}
-            onClick={() => handleCardClick(cardType)}
-          >
-            <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 1.5 }}>
-              {/* 아이콘 */}
-              <Box
+  const failedColor = failedCount > 0 ? colors.error : colors.success;
+
+  return (
+    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+        {/* 성공 게시 카드 */}
+        <Paper
+          elevation={0}
+          onClick={() => handleCardClick('status=COMPLETED')}
+          sx={{
+            flex: 1,
+            p: 2.5,
+            borderRadius: 2.5,
+            border: '1px solid',
+            borderColor: alpha(colors.success, 0.2),
+            backgroundColor: alpha(colors.success, 0.02),
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            position: 'relative',
+            overflow: 'hidden',
+            '&::before': {
+              content: '""',
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 3,
+              backgroundColor: colors.success,
+            },
+            '&:hover': {
+              borderColor: alpha(colors.success, 0.4),
+              backgroundColor: alpha(colors.success, 0.04),
+              transform: 'translateY(-1px)',
+              boxShadow: `0 4px 12px ${alpha(colors.success, 0.1)}`,
+            },
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <Box>
+              <Typography sx={{ ...typography.label, color: colors.success, mb: 0.75 }}>
+                성공 게시
+              </Typography>
+              <Typography
                 sx={{
-                  width: 40,
-                  height: 40,
-                  borderRadius: 2,
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  background: count > 0 ? config.gradient : config.bgColor,
-                  boxShadow: count > 0 ? `0 4px 12px ${alpha(config.color, 0.3)}` : 'none',
-                  flexShrink: 0,
+                  ...typography.kpiNumber,
+                  color: colors.success,
                 }}
               >
-                <Icon
-                  sx={{
-                    fontSize: 22,
-                    color: count > 0 ? 'white' : config.color,
-                  }}
-                />
-              </Box>
-
-              {/* 타이틀 + 숫자 */}
-              <Box sx={{ flex: 1, minWidth: 0 }}>
+                {completedCount}
                 <Typography
-                  variant="caption"
-                  sx={{
-                    display: 'block',
-                    color: 'text.secondary',
-                    fontWeight: 500,
-                    mb: 0.25,
-                  }}
+                  component="span"
+                  sx={{ ...typography.helper, ml: 0.5, color: alpha(colors.success, 0.7) }}
                 >
-                  {config.title}
+                  건
                 </Typography>
-                <Typography
-                  variant="h3"
-                  sx={{
-                    fontWeight: 700,
-                    fontSize: '1.5rem',
-                    lineHeight: 1.2,
-                    color: count > 0 ? config.color : 'text.primary',
-                  }}
-                >
-                  {count}
-                  <Typography
-                    component="span"
-                    sx={{
-                      fontSize: '0.875rem',
-                      fontWeight: 500,
-                      color: 'text.secondary',
-                      ml: 0.5,
-                    }}
-                  >
-                    건
-                  </Typography>
-                </Typography>
-              </Box>
+              </Typography>
             </Box>
-          </Paper>
-        );
-      })}
-    </Box>
+            <Box
+              sx={{
+                width: 44,
+                height: 44,
+                borderRadius: 1.5,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: alpha(colors.success, 0.1),
+              }}
+            >
+              <CheckCircle sx={{ fontSize: 24, color: colors.success }} />
+            </Box>
+          </Box>
+        </Paper>
+
+        {/* 실패 카드 */}
+        <Paper
+          elevation={0}
+          onClick={() => handleCardClick('status=FAILED')}
+          sx={{
+            flex: 1,
+            p: 2.5,
+            borderRadius: 2.5,
+            border: '1px solid',
+            borderColor: alpha(failedColor, failedCount > 0 ? 0.3 : 0.15),
+            backgroundColor: alpha(failedColor, 0.02),
+            cursor: 'pointer',
+            transition: 'all 0.15s ease',
+            position: 'relative',
+            overflow: 'hidden',
+            '&::before': {
+              content: '""',
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              bottom: 0,
+              width: 3,
+              backgroundColor: failedColor,
+            },
+            '&:hover': {
+              borderColor: alpha(failedColor, 0.4),
+              backgroundColor: alpha(failedColor, 0.04),
+              transform: 'translateY(-1px)',
+              boxShadow: `0 4px 12px ${alpha(failedColor, 0.1)}`,
+            },
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
+            <Box>
+              <Typography sx={{ ...typography.label, color: failedColor, mb: 0.75 }}>
+                실패
+              </Typography>
+              <Typography
+                sx={{
+                  ...typography.kpiNumber,
+                  color: failedColor,
+                }}
+              >
+                {failedCount}
+                <Typography
+                  component="span"
+                  sx={{ ...typography.helper, ml: 0.5, color: alpha(failedColor, 0.7) }}
+                >
+                  건
+                </Typography>
+              </Typography>
+            </Box>
+            <Box
+              sx={{
+                width: 44,
+                height: 44,
+                borderRadius: 1.5,
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: alpha(failedColor, 0.1),
+              }}
+            >
+              {failedCount > 0 ? (
+                <ErrorIcon sx={{ fontSize: 24, color: failedColor }} />
+              ) : (
+                <CheckCircle sx={{ fontSize: 24, color: failedColor }} />
+              )}
+            </Box>
+          </Box>
+          {failedCount === 0 && (
+            <Typography sx={{ ...typography.helper, mt: 1, color: colors.success }}>
+              ✨ 오늘 실패 없음
+            </Typography>
+          )}
+        </Paper>
+    </Stack>
   );
 }
-
-

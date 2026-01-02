@@ -718,6 +718,12 @@ export const naverSessionApi = {
     request<{ message: string; sessionId: string }>(`/naver-sessions/${id}/verify`, {
       method: 'POST',
     }),
+
+  /** 네이버 세션 강제 만료 (테스트용) */
+  expire: (id: string) =>
+    request<NaverSession>(`/naver-sessions/${id}/expire`, {
+      method: 'POST',
+    }),
 };
 
 // ============================================
@@ -923,6 +929,46 @@ export interface RecentResultsResponse {
   total: number;
 }
 
+// ==============================================
+// Active Run (실행 중 프로세스 추적)
+// ==============================================
+
+/** Active Run 정보 */
+export interface ActiveRunInfo {
+  id: string;
+  scheduleId: string;
+  scheduleName: string;
+  status: string;
+  totalTarget: number;
+  processedCount: number;
+  successCount: number;
+  failedCount: number;
+  updatedAt: string;
+  startedAt: string | null;
+}
+
+/** Active Run 이벤트 */
+export interface ActiveRunEvent {
+  index: number;
+  result: 'SUCCESS' | 'FAILED';
+  errorCode?: string;
+  createdAt: string;
+}
+
+/** Active Run 응답 (단일 - 레거시) */
+export interface ActiveRunResponse {
+  run: ActiveRunInfo | null;
+  recentEvents: ActiveRunEvent[];
+}
+
+/** Active Runs 응답 (복수 - 다중 스케줄 동시 실행 지원) */
+export interface ActiveRunsResponse {
+  /** 실행 중인 모든 Run 목록 */
+  runs: ActiveRunInfo[];
+  /** Run ID별 최근 이벤트들 */
+  recentEventsByRunId: Record<string, ActiveRunEvent[]>;
+}
+
 export const dashboardApi = {
   /** 연동 상태 조회 */
   getIntegrationStatus: () => 
@@ -951,4 +997,12 @@ export const dashboardApi = {
     if (params?.filter) query.set('filter', params.filter);
     return request<RecentResultsResponse>(`/dashboard/recent-results?${query}`);
   },
+
+  /** 현재 실행 중인 Run 조회 (폴링용, 레거시 - 단일) */
+  getActiveRun: () => 
+    request<ActiveRunResponse>('/dashboard/active-run'),
+
+  /** 현재 실행 중인 모든 Run 조회 (폴링용, 복수 - 다중 스케줄 지원) */
+  getActiveRuns: () => 
+    request<ActiveRunsResponse>('/dashboard/active-runs'),
 };

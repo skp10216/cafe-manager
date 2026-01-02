@@ -1,28 +1,35 @@
 'use client';
 
 /**
- * 대시보드 페이지
- * 프리미엄 UX: 연동 상태, 오늘 예정, 작업 현황, 최근 결과
- * 최고급 디자인 - 스크롤 최소화, 컴팩트 레이아웃
+ * 대시보드 페이지 - Premium Edition v2
+ *
+ * 프리미엄 UX 목표:
+ * - 첫 3초 안에 '오늘 성과'와 '현재 상태'가 읽히는 강한 정보 계층
+ * - 빈 상태는 "작고 고급스럽게" 처리
+ * - 메인 정보는 결과/리스크/다음 행동에 집중
+ *
+ * 레이아웃 순서:
+ * 1. KPI (Primary + Secondary)
+ * 2. 최근 결과 + 인사이트 카드 (핵심)
+ * 3. 예정 작업 (컴팩트)
+ * 4. 현재 실행 중 (있을 때만)
  */
 
 import { useEffect, useState, useCallback } from 'react';
-import { Box, Typography, Grid, alpha } from '@mui/material';
+import { Box, Typography, Grid } from '@mui/material';
 import { useRouter } from 'next/navigation';
-import {
-  TrendingUp,
-  CalendarMonth,
-} from '@mui/icons-material';
+import { TrendingUp, Schedule } from '@mui/icons-material';
 
 // 대시보드 컴포넌트
 import {
-  IntegrationStatusBanner,
   JobSummaryCards,
   NextRunCards,
   TodayTimeline,
   RecentResultsList,
   FailureSummary,
   OnboardingChecklist,
+  StatusSummaryHeader,
+  MultiRunTracker,
 } from '@/components/dashboard';
 
 // API
@@ -48,6 +55,7 @@ import { useToast } from '@/components/common/ToastProvider';
 // 세션 상태 유틸리티 (SSOT)
 import { isIntegrationOK } from '@/lib/session-status';
 
+
 /** 대시보드 데이터 상태 */
 interface DashboardData {
   integrationStatus: IntegrationStatusResponse | null;
@@ -62,7 +70,7 @@ interface DashboardData {
 export default function DashboardPage() {
   const router = useRouter();
   const toast = useToast();
-  
+
   // 데이터 상태
   const [data, setData] = useState<DashboardData>({
     integrationStatus: null,
@@ -78,10 +86,10 @@ export default function DashboardPage() {
       sessionStatus: null,
     },
   });
-  
+
   // Onboarding 체크리스트 숨김 상태
   const [hideOnboarding, setHideOnboarding] = useState(false);
-  
+
   // 로딩 상태
   const [loading, setLoading] = useState({
     integrationStatus: true,
@@ -91,6 +99,7 @@ export default function DashboardPage() {
     recentResults: true,
     failureSummary: true,
   });
+
 
   // ==============================================
   // 데이터 로딩
@@ -107,7 +116,7 @@ export default function DashboardPage() {
       recentResults: null,
       failureSummary: null,
     }));
-    
+
     setLoading({
       integrationStatus: true,
       jobSummary: true,
@@ -132,21 +141,26 @@ export default function DashboardPage() {
       dashboardApi.getJobSummary(),
       dashboardApi.getTodayTimeline(),
       dashboardApi.getNextRun(3),
-      dashboardApi.getRecentResults({ limit: 5 }), // 5개로 줄임
+      dashboardApi.getRecentResults({ limit: 3 }),
       dashboardApi.getFailureSummary('TODAY'),
-      templateApi.list(1, 1), // 템플릿 1개만 확인
-      scheduleApi.list(1, 1), // 스케줄 1개만 확인
+      templateApi.list(1, 1),
+      scheduleApi.list(1, 1),
     ]);
 
     // Onboarding 상태 계산
-    const integrationData = integrationStatusRes.status === 'fulfilled' 
-      ? integrationStatusRes.value 
-      : null;
-    const hasTemplates = templatesRes.status === 'fulfilled' && templatesRes.value.meta.total > 0;
-    const hasSchedules = schedulesRes.status === 'fulfilled' && schedulesRes.value.meta.total > 0;
+    const integrationData =
+      integrationStatusRes.status === 'fulfilled'
+        ? integrationStatusRes.value
+        : null;
+    const hasTemplates =
+      templatesRes.status === 'fulfilled' && templatesRes.value.meta.total > 0;
+    const hasSchedules =
+      schedulesRes.status === 'fulfilled' && schedulesRes.value.meta.total > 0;
     // SSOT: isIntegrationOK 사용하여 연동 상태 판단
     const naverConnected = isIntegrationOK(integrationData?.status);
-    const sessionStatus = integrationData?.session?.status as OnboardingStatus['sessionStatus'] ?? null;
+    const sessionStatus =
+      (integrationData?.session?.status as OnboardingStatus['sessionStatus']) ??
+      null;
 
     // 결과 처리
     setData({
@@ -204,7 +218,7 @@ export default function DashboardPage() {
       });
       // 잠시 후 데이터 새로고침
       setTimeout(() => loadDashboardData(), 2000);
-    } catch (error) {
+    } catch {
       toast.error('재연동에 실패했습니다');
     }
   };
@@ -220,7 +234,7 @@ export default function DashboardPage() {
       await naverSessionApi.verify(data.integrationStatus.session.id);
       toast.info('상태 확인이 시작되었습니다');
       setTimeout(() => loadDashboardData(), 3000);
-    } catch (error) {
+    } catch {
       toast.error('상태 확인에 실패했습니다');
     }
   };
@@ -259,13 +273,20 @@ export default function DashboardPage() {
     router.push(`/logs?jobId=${jobId}`);
   };
 
+  /** Active Run 로그 보기 */
+  const handleViewRunLogs = (runId: string) => {
+    router.push(`/logs?runId=${runId}`);
+  };
+
   /** 결과 필터 변경 */
-  const handleResultFilterChange = async (filter: 'ALL' | 'SUCCESS' | 'FAILED') => {
+  const handleResultFilterChange = async (
+    filter: 'ALL' | 'SUCCESS' | 'FAILED'
+  ) => {
     setLoading((prev) => ({ ...prev, recentResults: true }));
     try {
-      const results = await dashboardApi.getRecentResults({ limit: 5, filter });
+      const results = await dashboardApi.getRecentResults({ limit: 3, filter });
       setData((prev) => ({ ...prev, recentResults: results }));
-    } catch (error) {
+    } catch {
       toast.error('결과 조회에 실패했습니다');
     } finally {
       setLoading((prev) => ({ ...prev, recentResults: false }));
@@ -276,107 +297,29 @@ export default function DashboardPage() {
   // 렌더링
   // ==============================================
 
-  // 현재 시간대 인사말
-  const getGreeting = () => {
-    const hour = new Date().getHours();
-    if (hour < 12) return '좋은 아침이에요';
-    if (hour < 18) return '좋은 오후에요';
-    return '좋은 저녁이에요';
-  };
-
-  // 오늘 날짜
-  const getFormattedDate = () => {
-    return new Date().toLocaleDateString('ko-KR', {
-      month: 'long',
-      day: 'numeric',
-      weekday: 'long',
-    });
-  };
+  // 예정 작업이 있는지 확인
+  const hasScheduledItems =
+    (data.todayTimeline?.items?.length ?? 0) > 0 ||
+    (data.nextRun?.items?.length ?? 0) > 0;
 
   return (
     <Box sx={{ minHeight: '100%' }}>
       {/* ========================================
-          페이지 헤더 - 프리미엄 스타일
+          섹션 0: 상태 요약 헤더 (감성 문구 대체)
+          - 실시간 시계 (초 단위)
+          - 운영 상태 요약 문장
           ======================================== */}
-      <Box
-        sx={{
-          display: 'flex',
-          alignItems: 'flex-end',
-          justifyContent: 'space-between',
-          mb: 3,
-          pb: 2,
-          borderBottom: '1px solid',
-          borderColor: 'divider',
-        }}
-      >
-        <Box>
-          <Typography
-            variant="body2"
-            sx={{
-              color: 'text.secondary',
-              fontWeight: 500,
-              mb: 0.5,
-            }}
-          >
-            {getFormattedDate()}
-          </Typography>
-          <Typography
-            variant="h1"
-            sx={{
-              fontSize: { xs: '1.5rem', sm: '1.75rem' },
-              fontWeight: 700,
-              color: 'text.primary',
-            }}
-          >
-            {getGreeting()} 👋
-          </Typography>
-        </Box>
-
-        {/* 오늘 통계 미니 뱃지 */}
-        <Box
-          sx={{
-            display: { xs: 'none', sm: 'flex' },
-            alignItems: 'center',
-            gap: 2,
-          }}
-        >
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              px: 2,
-              py: 1,
-              borderRadius: 2,
-              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.08),
-            }}
-          >
-            <TrendingUp sx={{ fontSize: 18, color: 'primary.main' }} />
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              오늘 {data.jobSummary?.today?.total ?? 0}건 처리
-            </Typography>
-          </Box>
-          <Box
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 1,
-              px: 2,
-              py: 1,
-              borderRadius: 2,
-              backgroundColor: (theme) => alpha(theme.palette.success.main, 0.08),
-            }}
-          >
-            <CalendarMonth sx={{ fontSize: 18, color: 'success.main' }} />
-            <Typography variant="body2" sx={{ fontWeight: 600 }}>
-              {data.todayTimeline?.totalScheduledToday ?? 0}건 예정
-            </Typography>
-          </Box>
-        </Box>
-      </Box>
+      <StatusSummaryHeader
+        integration={data.integrationStatus}
+        jobSummary={data.jobSummary}
+        activeRun={null}
+        loading={loading.integrationStatus || loading.jobSummary}
+        onReconnect={handleReconnect}
+        onVerify={handleVerify}
+      />
 
       {/* ========================================
-          섹션 0: Onboarding 체크리스트
+          섹션 1: Onboarding 체크리스트
           ======================================== */}
       {!hideOnboarding && (
         <OnboardingChecklist
@@ -386,31 +329,37 @@ export default function DashboardPage() {
       )}
 
       {/* ========================================
-          섹션 A: 연동 상태 배너
+          섹션 2: 현재 실행 중인 작업 (Multi Run Tracker)
+          - 복수 스케줄 동시 실행 지원
+          - 마스터-디테일 UI 구조
           ======================================== */}
-      <IntegrationStatusBanner
-        status={data.integrationStatus?.status ?? 'NOT_CONNECTED'}
-        statusReason={data.integrationStatus?.statusReason ?? ''}
-        account={data.integrationStatus?.account ?? null}
-        session={data.integrationStatus?.session ?? null}
-        loading={loading.integrationStatus}
-        onReconnect={handleReconnect}
-        onVerify={handleVerify}
-      />
+      <Box sx={{ mb: 3 }}>
+        <MultiRunTracker
+          pollingOptions={{
+            intervalMs: 3000,
+            showSuccessToast: true,
+            showFailureToast: true,
+          }}
+          onViewLogs={handleViewRunLogs}
+        />
+      </Box>
 
       {/* ========================================
-          섹션 B: 오늘 작업 현황 (컴팩트)
+          섹션 3: 오늘 작업 현황 (KPI 카드)
+          - Primary: 성공/실패 (크게)
+          - Secondary: 시도/진행중 (작게)
           ======================================== */}
       <Box sx={{ mb: 3 }}>
         <Typography
           variant="h3"
           sx={{
             fontSize: '1rem',
-            fontWeight: 600,
+            fontWeight: 700,
             mb: 2,
             display: 'flex',
             alignItems: 'center',
             gap: 1,
+            color: 'text.primary',
           }}
         >
           <TrendingUp sx={{ fontSize: 20, color: 'primary.main' }} />
@@ -424,40 +373,11 @@ export default function DashboardPage() {
       </Box>
 
       {/* ========================================
-          섹션 C: 오늘 예정 + 다음 실행
+          섹션 4: 최근 결과 & 인사이트 카드 (핵심)
+          - 좌: 최근 결과 리스트
+          - 우: 인사이트 카드 (상태 기반)
           ======================================== */}
       <Grid container spacing={2.5} sx={{ mb: 3 }}>
-        {/* 오늘 예정 타임라인 */}
-        <Grid item xs={12} lg={7}>
-          <TodayTimeline
-            items={data.todayTimeline?.items ?? []}
-            stats={{
-              totalScheduledToday: data.todayTimeline?.totalScheduledToday ?? 0,
-              completedToday: data.todayTimeline?.completedToday ?? 0,
-              failedToday: data.todayTimeline?.failedToday ?? 0,
-            }}
-            loading={loading.todayTimeline}
-            onRunNow={handleRunNow}
-            onEdit={handleScheduleEdit}
-            onPause={handlePause}
-          />
-        </Grid>
-
-        {/* Next Run TOP 3 */}
-        <Grid item xs={12} lg={5}>
-          <NextRunCards
-            items={data.nextRun?.items ?? []}
-            loading={loading.nextRun}
-            onRunNow={handleRunNow}
-            onEdit={handleScheduleEdit}
-          />
-        </Grid>
-      </Grid>
-
-      {/* ========================================
-          섹션 D: 최근 결과 & 실패 분석
-          ======================================== */}
-      <Grid container spacing={2.5}>
         {/* 최근 게시 결과 */}
         <Grid item xs={12} lg={8}>
           <RecentResultsList
@@ -470,7 +390,7 @@ export default function DashboardPage() {
           />
         </Grid>
 
-        {/* 실패 원인 분석 */}
+        {/* 인사이트 카드 (실패 분석 / 축하) */}
         <Grid item xs={12} lg={4}>
           <FailureSummary
             topCategories={data.failureSummary?.topCategories ?? []}
@@ -481,6 +401,57 @@ export default function DashboardPage() {
           />
         </Grid>
       </Grid>
+
+      {/* ========================================
+          섹션 5: 오늘 예정 + 다음 실행 (컴팩트)
+          - 예정이 있을 때만 전체 표시
+          - 없으면 컴팩트한 빈 상태
+          ======================================== */}
+      <Box sx={{ mb: 3 }}>
+        <Typography
+          variant="h3"
+          sx={{
+            fontSize: '1rem',
+            fontWeight: 700,
+            mb: 2,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 1,
+            color: 'text.primary',
+          }}
+        >
+          <Schedule sx={{ fontSize: 20, color: 'primary.main' }} />
+          예정된 작업
+        </Typography>
+
+        <Grid container spacing={2.5}>
+          {/* 오늘 예정 타임라인 */}
+          <Grid item xs={12} lg={7}>
+            <TodayTimeline
+              items={data.todayTimeline?.items ?? []}
+              stats={{
+                totalScheduledToday: data.todayTimeline?.totalScheduledToday ?? 0,
+                completedToday: data.todayTimeline?.completedToday ?? 0,
+                failedToday: data.todayTimeline?.failedToday ?? 0,
+              }}
+              loading={loading.todayTimeline}
+              onRunNow={handleRunNow}
+              onEdit={handleScheduleEdit}
+              onPause={handlePause}
+            />
+          </Grid>
+
+          {/* Next Run TOP 3 */}
+          <Grid item xs={12} lg={5}>
+            <NextRunCards
+              items={data.nextRun?.items ?? []}
+              loading={loading.nextRun}
+              onRunNow={handleRunNow}
+              onEdit={handleScheduleEdit}
+            />
+          </Grid>
+        </Grid>
+      </Box>
     </Box>
   );
 }

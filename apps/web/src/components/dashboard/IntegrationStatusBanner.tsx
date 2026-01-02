@@ -77,7 +77,7 @@ const STATUS_CONFIG: Record<
     borderColor: '#BBF7D0',
     iconColor: '#22C55E',
     textColor: '#166534',
-    show: false, // 정상일 때는 배너 미표시
+    show: true, // 정상일 때도 연동 정보 표시
   },
   WARNING: {
     icon: Warning,
@@ -145,9 +145,122 @@ export default function IntegrationStatusBanner({
     );
   }
 
-  // 정상 상태면 배너 미표시
-  if (!config.show) {
-    return null;
+  // 정상 상태 (OK) - 컴팩트 연동 정보 표시
+  if (status === 'OK') {
+    return (
+      <Paper
+        elevation={0}
+        sx={{
+          mb: 3,
+          p: 2,
+          borderRadius: 2.5,
+          border: '1px solid',
+          borderColor: 'rgba(34, 197, 94, 0.2)',
+          background: (theme) =>
+            theme.palette.mode === 'dark'
+              ? 'rgba(34, 197, 94, 0.05)'
+              : 'linear-gradient(135deg, rgba(34, 197, 94, 0.04) 0%, rgba(255, 255, 255, 1) 100%)',
+        }}
+      >
+        <Box
+          sx={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 2,
+            flexWrap: { xs: 'wrap', sm: 'nowrap' },
+          }}
+        >
+          {/* 네이버 아바타 + 체크 */}
+          <Box sx={{ position: 'relative', flexShrink: 0 }}>
+            <Avatar
+              sx={{
+                width: 44,
+                height: 44,
+                background: 'linear-gradient(135deg, #03C75A 0%, #00A344 100%)',
+                fontSize: '1.25rem',
+                fontWeight: 800,
+                fontFamily: 'system-ui, sans-serif',
+              }}
+            >
+              N
+            </Avatar>
+            <CheckCircle
+              sx={{
+                position: 'absolute',
+                bottom: -2,
+                right: -2,
+                fontSize: 18,
+                color: '#22C55E',
+                backgroundColor: 'white',
+                borderRadius: '50%',
+              }}
+            />
+          </Box>
+
+          {/* 연동 정보 */}
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+              <Typography
+                variant="subtitle2"
+                sx={{ fontWeight: 600, color: 'text.primary' }}
+              >
+                네이버 연동 완료
+              </Typography>
+              <Box
+                sx={{
+                  px: 0.75,
+                  py: 0.25,
+                  borderRadius: 0.75,
+                  fontSize: '0.65rem',
+                  fontWeight: 600,
+                  color: '#22C55E',
+                  backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                }}
+              >
+                정상
+              </Box>
+            </Box>
+            <Typography
+              variant="body2"
+              sx={{ color: 'text.secondary', fontSize: '0.8125rem' }}
+            >
+              {account?.loginId}
+              {session?.naverNickname && (
+                <Typography
+                  component="span"
+                  sx={{
+                    ml: 0.75,
+                    px: 0.75,
+                    py: 0.125,
+                    borderRadius: 0.5,
+                    backgroundColor: 'rgba(0,0,0,0.04)',
+                    fontSize: '0.75rem',
+                    color: 'text.primary',
+                    fontWeight: 500,
+                  }}
+                >
+                  {session.naverNickname}
+                </Typography>
+              )}
+            </Typography>
+          </Box>
+
+          {/* 설정 버튼 */}
+          <Button
+            size="small"
+            variant="text"
+            onClick={() => router.push('/settings')}
+            sx={{
+              color: 'text.secondary',
+              fontSize: '0.75rem',
+              '&:hover': { backgroundColor: 'rgba(0,0,0,0.04)' },
+            }}
+          >
+            설정
+          </Button>
+        </Box>
+      </Paper>
+    );
   }
 
   // NOT_CONNECTED 상태 (미연동) - 컴팩트 프리미엄 디자인

@@ -31,6 +31,13 @@ export class ScheduleRunService {
   async createOrUpdate(data: CreateOrUpdateRunInput): Promise<ScheduleRun | null> {
     const { scheduleId, userId, runDate, status, blockCode, blockReason } = data;
 
+    // #region agent log
+    this.logger.debug(
+      `[DEBUG:createOrUpdate:ENTRY] scheduleId=${scheduleId}, requestedStatus=${status}, ` +
+      `blockCode=${blockCode}, runDate=${runDate.toISOString()}`
+    );
+    // #endregion
+
     try {
       // 기존 레코드 확인
       const existing = await this.prisma.scheduleRun.findUnique({
@@ -39,9 +46,31 @@ export class ScheduleRunService {
         },
       });
 
+      // #region agent log
+      this.logger.debug(
+        `[DEBUG:createOrUpdate:EXISTING] scheduleId=${scheduleId}, ` +
+        `existingId=${existing?.id || 'null'}, existingStatus=${existing?.status || 'null'}, ` +
+        `totalJobs=${existing?.totalJobs || 0}, completedJobs=${existing?.completedJobs || 0}, ` +
+        `failedJobs=${existing?.failedJobs || 0}`
+      );
+      // #endregion
+
       if (existing) {
-        // 기존 레코드가 BLOCKED/SKIPPED면 업데이트 허용
-        if (existing.status === 'BLOCKED' || existing.status === 'SKIPPED') {
+        // [FIX] RUNNING → BLOCKED/SKIPPED 전이 허용
+        // 세션 문제로 차단되어야 할 스케줄이 기존 RUNNING 때문에 기록되지 않는 문제 해결
+        const allowedTransitionTargets = ['BLOCKED', 'SKIPPED'];
+        const allowedTransitionSources = ['BLOCKED', 'SKIPPED', 'RUNNING', 'QUEUED', 'PENDING'];
+
+        if (
+          allowedTransitionTargets.includes(status) &&
+          allowedTransitionSources.includes(existing.status)
+        ) {
+          // #region agent log
+          this.logger.debug(
+            `[DEBUG:createOrUpdate:UPDATE] scheduleId=${scheduleId}, ` +
+            `fromStatus=${existing.status} -> toStatus=${status}`
+          );
+          // #endregion
           return await this.prisma.scheduleRun.update({
             where: { id: existing.id },
             data: {
@@ -53,12 +82,25 @@ export class ScheduleRunService {
           });
         }
 
-        // 이미 실행 중이거나 완료된 경우 null 반환
+        // 완료된 경우(COMPLETED, FAILED)는 업데이트하지 않음
+        // #region agent log
+        this.logger.warn(
+          `[DEBUG:createOrUpdate:BLOCKED_BY_EXISTING] scheduleId=${scheduleId}, ` +
+          `existingStatus=${existing.status}, requestedStatus=${status}, ` +
+          `blockCode=${blockCode} - 완료된 상태로 인해 업데이트 불가`
+        );
+        // #endregion
         this.logger.debug(
           `ScheduleRun already exists with status=${existing.status}: scheduleId=${scheduleId}`
         );
         return null;
       }
+
+      // #region agent log
+      this.logger.debug(
+        `[DEBUG:createOrUpdate:CREATE_NEW] scheduleId=${scheduleId}, status=${status}`
+      );
+      // #endregion
 
       // 새로 생성
       return await this.prisma.scheduleRun.create({
@@ -75,6 +117,11 @@ export class ScheduleRunService {
     } catch (error: any) {
       if (error.code === 'P2002') {
         // 동시 요청으로 인한 중복
+        // #region agent log
+        this.logger.warn(
+          `[DEBUG:createOrUpdate:P2002_DUPLICATE] scheduleId=${scheduleId}, runDate=${runDate}`
+        );
+        // #endregion
         this.logger.debug(
           `ScheduleRun duplicate: scheduleId=${scheduleId}, runDate=${runDate}`
         );

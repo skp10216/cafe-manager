@@ -15,5 +15,14 @@ export type { FailureCategoryItem } from './FailureSummary';
 export { default as OnboardingChecklist } from './OnboardingChecklist';
 export type { OnboardingStatus } from './OnboardingChecklist';
 
+// 고도화 컴포넌트
+export { default as StatusSummaryHeader } from './StatusSummaryHeader';
+export { default as ActiveRunCard } from './ActiveRunCard';
+
+// 복수 실행 지원 컴포넌트 (v2)
+export { default as MultiRunTracker } from './MultiRunTracker';
+export { default as GlobalRunOverview } from './GlobalRunOverview';
+export { default as RunsList } from './RunsList';
+export { default as RunDetail } from './RunDetail';
 
 

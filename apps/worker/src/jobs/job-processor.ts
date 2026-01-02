@@ -36,6 +36,15 @@ const SESSION_TRANSITION_ERROR_CODES: ErrorCode[] = [
   'LOGIN_FAILED',
 ];
 
+/** 세션 재연결이 필요한 에러 코드 (SESSION_ERROR) */
+const SESSION_RECONNECT_ERROR_CODES: ErrorCode[] = [
+  'AUTH_EXPIRED',
+  'SESSION_ERROR',
+];
+
+/** 세션 재연결 결과 */
+type SessionReconnectResult = 'SUCCESS' | 'FAIL' | 'SKIP';
+
 interface JobData {
   jobId: string;
   type: JobType;
@@ -620,8 +629,11 @@ export class JobProcessor {
       throw new Error('Job을 찾을 수 없습니다');
     }
 
-    // 세션 찾기
+    // [개선] 세션 찾기 - 먼저 HEALTHY/EXPIRING 세션 찾고, 없으면 EXPIRED 세션이라도 찾음
     let session;
+    let needsReconnect = false;  // 세션 재연결 필요 여부
+    
+    // 1단계: HEALTHY/EXPIRING 상태의 세션 찾기
     if (naverAccountId) {
       session = await this.prisma.naverSession.findFirst({
         where: {
@@ -640,9 +652,53 @@ export class JobProcessor {
       });
     }
 
+    // 2단계: 세션이 없으면 EXPIRED 상태라도 찾아서 재연결 시도
     if (!session) {
+      logger.info(`[SessionRecovery] HEALTHY/EXPIRING 세션 없음, EXPIRED 세션 찾기 시도`);
+      
+      if (naverAccountId) {
+        session = await this.prisma.naverSession.findFirst({
+          where: {
+            naverAccountId,
+            status: { in: ['EXPIRED', 'ERROR'] },
+          },
+          include: { naverAccount: true },
+          orderBy: { updatedAt: 'desc' },
+        });
+      } else {
+        session = await this.prisma.naverSession.findFirst({
+          where: {
+            naverAccount: { userId: job.userId },
+            status: { in: ['EXPIRED', 'ERROR'] },
+          },
+          include: { naverAccount: true },
+          orderBy: { updatedAt: 'desc' },
+        });
+      }
+      
+      if (session) {
+        needsReconnect = true;
+        logger.info(`[SessionRecovery] EXPIRED 세션 발견: ${session.id}, 재연결 시도 예정`);
+      }
+    }
+
+    if (!session) {
+      // #region agent log
+      logger.warn(
+        `[DEBUG:getSession:NOT_FOUND] jobId=${jobId}, userId=${job.userId}, ` +
+        `naverAccountId=${naverAccountId || 'auto'}, ` +
+        `이유: 어떤 상태의 세션도 없음`
+      );
+      // #endregion
       throw new Error('활성화된 네이버 세션이 없습니다. 네이버 계정을 먼저 연동해주세요.');
     }
+
+    // #region agent log
+    logger.debug(
+      `[DEBUG:getSession:FOUND] jobId=${jobId}, sessionId=${session.id}, ` +
+      `sessionStatus=${session.status}, lastVerifiedAt=${session.lastVerifiedAt?.toISOString() || 'null'}`
+    );
+    // #endregion
 
     await this.addLog(jobId, 'INFO', `세션 사용: ${session.naverAccount?.loginId || session.id}`);
 
@@ -651,18 +707,60 @@ export class JobProcessor {
     const client = new NaverCafeClient(context);
 
     try {
-      // 1. 로그인 상태 확인
+      // 1. 로그인 상태 확인 (또는 EXPIRED 세션이면 바로 재연결 필요)
       await this.addLog(jobId, 'INFO', `${progressText}로그인 상태 확인 중...`);
-      const isLoggedIn = await client.isLoggedIn();
+      const isLoggedIn = needsReconnect ? false : await client.isLoggedIn();
 
       if (!isLoggedIn) {
-        await this.addLog(jobId, 'WARN', '세션이 만료됨. 자동 재로그인 시도...');
+        // 재연결 이미 시도했는지 확인 (Job당 1회만 허용)
+        const currentJob = await this.prisma.job.findUnique({
+          where: { id: jobId },
+          select: { sessionReconnectTried: true },
+        });
+        
+        if (currentJob?.sessionReconnectTried) {
+          // 이미 재연결 시도했으면 즉시 실패
+          logger.error(`[SessionRecovery] jobId=${jobId}: 이미 재연결 시도함, 즉시 실패 처리`);
+          await this.prisma.job.update({
+            where: { id: jobId },
+            data: { sessionReconnectResult: 'SKIP' },
+          });
+          throw new Error('세션 재연결이 이미 시도되었습니다. Job 실패 처리합니다.');
+        }
+
+        // 재연결 시도 기록
+        await this.prisma.job.update({
+          where: { id: jobId },
+          data: { sessionReconnectTried: true },
+        });
+
+        // #region agent log
+        logger.warn(
+          `[SessionRecovery] jobId=${jobId}, sessionId=${session.id}, ` +
+          `sessionStatus=${session.status}, needsReconnect=${needsReconnect}, 재로그인 시도 시작...`
+        );
+        // #endregion
+
+        await this.addLog(jobId, 'WARN', `세션이 만료됨. 자동 재로그인 시도... (Job당 1회 허용)`);
 
         if (session.naverAccount) {
           const password = decrypt(session.naverAccount.passwordEncrypted);
           const loginResult = await client.login(session.naverAccount.loginId, password);
 
           if (!loginResult.success) {
+            // #region agent log
+            logger.error(
+              `[SessionRecovery:FAILED] jobId=${jobId}, sessionId=${session.id}, ` +
+              `loginError=${loginResult.error}, DB 상태 EXPIRED로 전환, Job 실패 처리`
+            );
+            // #endregion
+
+            // 재연결 실패 기록
+            await this.prisma.job.update({
+              where: { id: jobId },
+              data: { sessionReconnectResult: 'FAIL' },
+            });
+
             await this.prisma.naverSession.update({
               where: { id: session.id },
               data: {
@@ -674,14 +772,44 @@ export class JobProcessor {
             throw new Error(`재로그인 실패: ${loginResult.error}`);
           }
 
-          await this.addLog(jobId, 'INFO', '재로그인 성공');
+          // 재연결 성공!
+          logger.info(`[SessionRecovery:SUCCESS] jobId=${jobId}, sessionId=${session.id}`);
+          await this.prisma.job.update({
+            where: { id: jobId },
+            data: { sessionReconnectResult: 'SUCCESS' },
+          });
+          
+          // 세션 상태를 HEALTHY로 업데이트
+          await this.prisma.naverSession.update({
+            where: { id: session.id },
+            data: {
+              status: 'HEALTHY',
+              errorCode: null,
+              errorMessage: null,
+              lastVerifiedAt: new Date(),
+            },
+          });
+
+          await this.addLog(jobId, 'INFO', '✅ 세션 재연결 성공! 게시글 작성 계속 진행');
           await this.browserManager.saveContext(session.profileDir);
         } else {
+          // #region agent log
+          logger.error(
+            `[SessionRecovery:NO_ACCOUNT] jobId=${jobId}, sessionId=${session.id}, ` +
+            `naverAccount 없음, DB 상태 EXPIRED로 전환`
+          );
+          // #endregion
+
+          await this.prisma.job.update({
+            where: { id: jobId },
+            data: { sessionReconnectResult: 'FAIL' },
+          });
+
           await this.prisma.naverSession.update({
             where: { id: session.id },
             data: { status: 'EXPIRED', errorCode: 'AUTH_EXPIRED' },
           });
-          throw new Error('네이버 세션이 만료되었습니다');
+          throw new Error('네이버 세션이 만료되었습니다 (계정 정보 없음)');
         }
       }
 
@@ -937,46 +1065,86 @@ export class JobProcessor {
   }
 
   /**
-   * ScheduleRun 진행률 업데이트
+   * ScheduleRun 진행률 업데이트 (Atomic Increment + Transaction)
+   * 
+   * 동시성 안전:
+   * - 트랜잭션으로 모든 업데이트를 원자적으로 처리
+   * - increment 후 재조회로 정확한 상태 체크
+   * - 모든 Job 완료 시 상태 전환 보장
    */
   private async updateScheduleRunProgress(
     scheduleRunId: string,
     jobStatus: 'completed' | 'failed'
   ) {
     try {
-      const run = await this.prisma.scheduleRun.findUnique({
-        where: { id: scheduleRunId },
-      });
-
-      if (!run) {
-        logger.warn(`ScheduleRun not found: ${scheduleRunId}`);
-        return;
-      }
-
-      const updates: any = {
-        completedJobs: jobStatus === 'completed' ? run.completedJobs + 1 : run.completedJobs,
-        failedJobs: jobStatus === 'failed' ? run.failedJobs + 1 : run.failedJobs,
-      };
-
-      if (!run.startedAt) {
-        updates.startedAt = new Date();
-      }
-
-      if (updates.completedJobs + updates.failedJobs >= run.totalJobs) {
-        updates.status = updates.failedJobs === 0 ? 'COMPLETED' : 'FAILED';
-        updates.finishedAt = new Date();
-      }
-
-      await this.prisma.scheduleRun.update({
-        where: { id: scheduleRunId },
-        data: updates,
-      });
-
       logger.debug(
-        `ScheduleRun ${scheduleRunId} updated: ${updates.completedJobs}/${run.totalJobs} completed, ${updates.failedJobs} failed`
+        `[ScheduleRun:${scheduleRunId}] Updating progress: ${jobStatus}`
       );
+
+      // 트랜잭션으로 모든 업데이트를 원자적으로 처리
+      await this.prisma.$transaction(async (tx) => {
+        // 1단계: Atomic increment로 카운트 업데이트
+        await tx.scheduleRun.update({
+          where: { id: scheduleRunId },
+          data: {
+            completedJobs: jobStatus === 'completed' ? { increment: 1 } : undefined,
+            failedJobs: jobStatus === 'failed' ? { increment: 1 } : undefined,
+          },
+        });
+
+        // 2단계: 업데이트 후 최신 상태 재조회 (동시성 문제 방지)
+        const latest = await tx.scheduleRun.findUniqueOrThrow({
+          where: { id: scheduleRunId },
+        });
+
+        const processedCount = latest.completedJobs + latest.failedJobs;
+        
+        logger.debug(
+          `[ScheduleRun:${scheduleRunId}] Current state: ${processedCount}/${latest.totalJobs} ` +
+          `(completed: ${latest.completedJobs}, failed: ${latest.failedJobs}, status: ${latest.status})`
+        );
+
+        // 3단계: 첫 Job 처리 시 startedAt 설정 및 RUNNING 전환
+        if (!latest.startedAt) {
+          await tx.scheduleRun.update({
+            where: { id: scheduleRunId },
+            data: { 
+              startedAt: new Date(),
+              status: 'RUNNING',
+            },
+          });
+          logger.info(`[ScheduleRun:${scheduleRunId}] Started (status → RUNNING)`);
+        }
+
+        // 4단계: 완료 여부 체크 (모든 Job 처리 완료)
+        // [정의] processedCount = completedJobs(성공) + failedJobs(실패)
+        // 모든 Job이 처리되면(성공+실패=totalJobs) 최종 상태 결정
+        if (processedCount >= latest.totalJobs && latest.status === 'RUNNING') {
+          // 모든 Job이 성공이면 COMPLETED, 하나라도 실패하면 FAILED
+          const finalStatus = latest.failedJobs === 0 ? 'COMPLETED' : 'FAILED';
+          await tx.scheduleRun.update({
+            where: { id: scheduleRunId },
+            data: {
+              status: finalStatus,
+              finishedAt: new Date(),
+            },
+          });
+          logger.info(
+            `[ScheduleRun:${scheduleRunId}] 최종 상태: ${finalStatus} ` +
+            `(총 ${latest.totalJobs}회 실행: 성공 ${latest.completedJobs}건, 실패 ${latest.failedJobs}건)`
+          );
+        }
+      });
     } catch (error) {
-      logger.error(`Failed to update ScheduleRun progress: ${error instanceof Error ? error.message : String(error)}`);
+      // 에러 발생 시에도 Job 자체는 성공했으므로, 로그만 남기고 에러를 전파하지 않음
+      // 단, 상세 로깅으로 디버깅 용이하게
+      logger.error(
+        `[ScheduleRun:${scheduleRunId}] Failed to update progress (jobStatus: ${jobStatus}): ` +
+        `${error instanceof Error ? error.message : String(error)}`
+      );
+      if (error instanceof Error && error.stack) {
+        logger.error(`[ScheduleRun:${scheduleRunId}] Stack trace: ${error.stack}`);
+      }
     }
   }
 }

@@ -82,4 +82,13 @@ export class NaverSessionController {
   async verify(@CurrentUser() user: RequestUser, @Param('id') id: string) {
     return this.naverSessionService.verify(id, user.userId);
   }
+
+  /**
+   * 네이버 세션 강제 만료 (테스트용)
+   * POST /api/naver-sessions/:id/expire
+   */
+  @Post(':id/expire')
+  async expire(@CurrentUser() user: RequestUser, @Param('id') id: string) {
+    return this.naverSessionService.expire(id, user.userId);
+  }
 }

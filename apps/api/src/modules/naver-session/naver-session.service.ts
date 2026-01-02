@@ -264,6 +264,28 @@ export class NaverSessionService {
   }
 
   /**
+   * 네이버 세션 강제 만료 (테스트용)
+   * DB 상태만 EXPIRED로 변경 (실제 쿠키는 유지)
+   */
+  async expire(id: string, userId: string) {
+    const session = await this.findOne(id, userId);
+
+    if (session.status === 'PENDING') {
+      throw new ConflictException('세션 연동이 진행 중입니다');
+    }
+
+    this.logger.log(`세션 강제 만료: sessionId=${id}`);
+
+    return this.prisma.naverSession.update({
+      where: { id },
+      data: {
+        status: 'EXPIRED',
+        errorMessage: '테스트를 위해 강제 만료됨',
+      },
+    });
+  }
+
+  /**
    * 네이버 세션 검증
    * 실제 로그인 상태와 닉네임을 확인하는 Job 생성
    */

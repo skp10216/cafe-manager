@@ -348,10 +348,12 @@ model ScheduleRun {
   status        RunStatus   @default(PENDING)
 
   // 실행 통계
+  // 주의: completedJobs는 "성공한 Job 수"를 의미 (기존 호환)
+  // processedJobs = completedJobs + failedJobs + skippedJobs (처리 완료된 총 Job 수)
   totalJobs     Int         @default(0) @map("total_jobs")
-  completedJobs Int         @default(0) @map("completed_jobs")
-  failedJobs    Int         @default(0) @map("failed_jobs")
-  skippedJobs   Int         @default(0) @map("skipped_jobs")   // 스킵된 Job 수
+  completedJobs Int         @default(0) @map("completed_jobs")  // 성공한 Job 수
+  failedJobs    Int         @default(0) @map("failed_jobs")     // 실패한 Job 수
+  skippedJobs   Int         @default(0) @map("skipped_jobs")    // 스킵된 Job 수
 
   // 차단/스킵 사유 (BLOCKED/SKIPPED 시)
   blockReason   String?     @map("block_reason")
@@ -361,6 +363,7 @@ model ScheduleRun {
   triggeredAt   DateTime    @default(now()) @map("triggered_at")
   startedAt     DateTime?   @map("started_at")
   finishedAt    DateTime?   @map("finished_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")  // 마지막 진행 업데이트 시점
 
   // Relations
   schedule      Schedule    @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
@@ -461,6 +464,10 @@ model Job {
   // 재시도 정보
   attempts       Int         @default(0)
   maxAttempts    Int         @default(3) @map("max_attempts")
+
+  // 세션 재연결 정보 (SESSION_ERROR 발생 시)
+  sessionReconnectTried    Boolean  @default(false) @map("session_reconnect_tried")
+  sessionReconnectResult   String?  @map("session_reconnect_result")  // SUCCESS | FAIL | SKIP
 
   // 디버그 모드 아티팩트
   runMode        RunMode     @default(HEADLESS) @map("run_mode")

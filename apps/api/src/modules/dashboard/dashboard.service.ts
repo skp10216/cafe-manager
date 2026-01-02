@@ -21,6 +21,10 @@ import {
   ERROR_CATEGORY_LABELS,
   RecentResultsResponse,
   RecentResultItem,
+  ActiveRunResponse,
+  ActiveRunsResponse,
+  ActiveRunInfo,
+  ActiveRunEvent,
 } from './dto';
 
 @Injectable()
@@ -49,6 +53,16 @@ export class DashboardService {
         },
       },
     });
+
+    // #region agent log
+    this.logger.debug(
+      `[DEBUG:getIntegrationStatus] userId=${userId}, ` +
+      `accountId=${account?.id || 'null'}, ` +
+      `sessionId=${account?.sessions[0]?.id || 'null'}, ` +
+      `sessionStatus=${account?.sessions[0]?.status || 'null'}, ` +
+      `lastVerifiedAt=${account?.sessions[0]?.lastVerifiedAt?.toISOString() || 'null'}`
+    );
+    // #endregion
 
     // 계정이 없는 경우
     if (!account) {
@@ -608,6 +622,268 @@ export class DashboardService {
 
     return { items, total };
   }
-}
 
+  // ==============================================
+  // 7. Active Run 조회 (실행 중 프로세스 추적)
+  // ==============================================
+
+  /**
+   * 현재 실행 중인 ScheduleRun 조회 (대시보드 폴링용)
+   * 
+   * - RUNNING 상태의 최신 run 1개를 반환
+   * - 없으면 { run: null, recentEvents: [] }
+   * - 최근 5개 완료/실패 Job을 recentEvents로 제공
+   */
+  async getActiveRun(userId: string): Promise<ActiveRunResponse> {
+    // 1단계: RUNNING 또는 QUEUED 상태의 최신 run 조회
+    // (QUEUED도 포함하여 "대기 중" 상태도 표시)
+    let run = await this.prisma.scheduleRun.findFirst({
+      where: {
+        userId,
+        status: { in: ['RUNNING', 'QUEUED'] },
+      },
+      include: {
+        schedule: {
+          select: { name: true },
+        },
+      },
+      orderBy: [
+        { status: 'asc' }, // RUNNING 우선 (알파벳순 QUEUED < RUNNING)
+        { startedAt: 'desc' },
+        { triggeredAt: 'desc' },
+      ],
+    });
+
+    // 2단계: RUNNING/QUEUED가 없으면, 최근 30초 이내 완료된 run 표시 (깜빡임 방지)
+    if (!run) {
+      const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
+      run = await this.prisma.scheduleRun.findFirst({
+        where: {
+          userId,
+          status: { in: ['COMPLETED', 'FAILED'] },
+          finishedAt: { gte: thirtySecondsAgo },
+        },
+        include: {
+          schedule: {
+            select: { name: true },
+          },
+        },
+        orderBy: { finishedAt: 'desc' },
+      });
+
+      // 최근 완료된 run도 없으면 null 반환
+      if (!run) {
+        return { run: null, recentEvents: [] };
+      }
+    }
+
+    // 3단계: "Stuck" 상태 자동 복구 (RUNNING이지만 모든 Job 완료된 경우)
+    const processedCount = run.completedJobs + run.failedJobs;
+    if (run.status === 'RUNNING' && processedCount >= run.totalJobs && run.totalJobs > 0) {
+      this.logger.warn(
+        `[Auto-Recovery] ScheduleRun ${run.id} is stuck in RUNNING state ` +
+        `(${processedCount}/${run.totalJobs}). Auto-completing...`
+      );
+      
+      const finalStatus = run.failedJobs === 0 ? 'COMPLETED' : 'FAILED';
+      const updatedRun = await this.prisma.scheduleRun.update({
+        where: { id: run.id },
+        data: {
+          status: finalStatus,
+          finishedAt: new Date(),
+        },
+        include: {
+          schedule: {
+            select: { name: true },
+          },
+        },
+      });
+      
+      this.logger.log(
+        `[Auto-Recovery] ScheduleRun ${run.id} → ${finalStatus} ` +
+        `(${run.completedJobs} completed, ${run.failedJobs} failed)`
+      );
+      
+      // 복구 후에도 완료된 run 정보를 반환 (깜빡임 방지)
+      run = updatedRun;
+    }
+
+    // 4단계: 이 run의 최근 완료/실패 Job 5개 조회
+    const recentJobs = await this.prisma.job.findMany({
+      where: {
+        scheduleRunId: run.id,
+        status: { in: ['COMPLETED', 'FAILED'] },
+      },
+      orderBy: { finishedAt: 'desc' },
+      take: 5,
+      select: {
+        sequenceNumber: true,
+        status: true,
+        errorCode: true,
+        finishedAt: true,
+      },
+    });
+
+    // 5단계: 응답 구성
+    const runInfo: ActiveRunInfo = {
+      id: run.id,
+      scheduleId: run.scheduleId,
+      scheduleName: run.schedule.name,
+      status: run.status,
+      totalTarget: run.totalJobs,
+      processedCount: run.completedJobs + run.failedJobs,
+      successCount: run.completedJobs,
+      failedCount: run.failedJobs,
+      updatedAt: run.updatedAt.toISOString(),
+      startedAt: run.startedAt?.toISOString() ?? null,
+    };
+
+    const recentEvents: ActiveRunEvent[] = recentJobs.map((job) => ({
+      index: job.sequenceNumber ?? 0,
+      result: job.status === 'COMPLETED' ? 'SUCCESS' : 'FAILED',
+      errorCode: job.errorCode ?? undefined,
+      createdAt: job.finishedAt?.toISOString() ?? '',
+    }));
+
+    return { run: runInfo, recentEvents };
+  }
+
+  // ==============================================
+  // 8. Active Runs 조회 (복수 실행 지원)
+  // ==============================================
+
+  /**
+   * 현재 실행 중인 모든 ScheduleRun 조회 (다중 스케줄 동시 실행 지원)
+   * 
+   * - RUNNING/QUEUED 상태의 모든 run을 반환
+   * - 최근 30초 이내 완료된 run도 포함 (깜빡임 방지)
+   * - 각 run별 최근 5개 이벤트 제공
+   */
+  async getActiveRuns(userId: string): Promise<ActiveRunsResponse> {
+    const thirtySecondsAgo = new Date(Date.now() - 30 * 1000);
+
+    // 1단계: RUNNING/QUEUED 상태의 모든 run 조회
+    const runningRuns = await this.prisma.scheduleRun.findMany({
+      where: {
+        userId,
+        status: { in: ['RUNNING', 'QUEUED'] },
+      },
+      include: {
+        schedule: {
+          select: { name: true },
+        },
+      },
+      orderBy: [
+        { status: 'asc' }, // RUNNING 우선
+        { startedAt: 'desc' },
+        { triggeredAt: 'desc' },
+      ],
+    });
+
+    // 2단계: 최근 30초 이내 완료된 run도 포함 (깜빡임 방지)
+    const recentlyCompletedRuns = await this.prisma.scheduleRun.findMany({
+      where: {
+        userId,
+        status: { in: ['COMPLETED', 'FAILED'] },
+        finishedAt: { gte: thirtySecondsAgo },
+      },
+      include: {
+        schedule: {
+          select: { name: true },
+        },
+      },
+      orderBy: { finishedAt: 'desc' },
+      take: 5, // 최근 완료 5개까지만
+    });
+
+    // 3단계: 중복 제거하여 병합
+    const allRunIds = new Set<string>();
+    const allRuns = [...runningRuns, ...recentlyCompletedRuns].filter(run => {
+      if (allRunIds.has(run.id)) return false;
+      allRunIds.add(run.id);
+      return true;
+    });
+
+    // 4단계: "Stuck" 상태 자동 복구 처리
+    const processedRuns: typeof allRuns = [];
+    for (const run of allRuns) {
+      const processedCount = run.completedJobs + run.failedJobs;
+      
+      if (run.status === 'RUNNING' && processedCount >= run.totalJobs && run.totalJobs > 0) {
+        this.logger.warn(
+          `[Auto-Recovery] ScheduleRun ${run.id} is stuck in RUNNING state ` +
+          `(${processedCount}/${run.totalJobs}). Auto-completing...`
+        );
+        
+        const finalStatus = run.failedJobs === 0 ? 'COMPLETED' : 'FAILED';
+        const updatedRun = await this.prisma.scheduleRun.update({
+          where: { id: run.id },
+          data: {
+            status: finalStatus,
+            finishedAt: new Date(),
+          },
+          include: {
+            schedule: {
+              select: { name: true },
+            },
+          },
+        });
+        
+        this.logger.log(
+          `[Auto-Recovery] ScheduleRun ${run.id} → ${finalStatus} ` +
+          `(${run.completedJobs} completed, ${run.failedJobs} failed)`
+        );
+        
+        processedRuns.push(updatedRun);
+      } else {
+        processedRuns.push(run);
+      }
+    }
+
+    // 5단계: 각 run의 최근 이벤트 조회 (병렬)
+    const recentEventsByRunId: Record<string, ActiveRunEvent[]> = {};
+    
+    await Promise.all(
+      processedRuns.map(async (run) => {
+        const recentJobs = await this.prisma.job.findMany({
+          where: {
+            scheduleRunId: run.id,
+            status: { in: ['COMPLETED', 'FAILED'] },
+          },
+          orderBy: { finishedAt: 'desc' },
+          take: 5,
+          select: {
+            sequenceNumber: true,
+            status: true,
+            errorCode: true,
+            finishedAt: true,
+          },
+        });
+
+        recentEventsByRunId[run.id] = recentJobs.map((job) => ({
+          index: job.sequenceNumber ?? 0,
+          result: job.status === 'COMPLETED' ? 'SUCCESS' as const : 'FAILED' as const,
+          errorCode: job.errorCode ?? undefined,
+          createdAt: job.finishedAt?.toISOString() ?? '',
+        }));
+      })
+    );
+
+    // 6단계: 응답 구성
+    const runs: ActiveRunInfo[] = processedRuns.map((run) => ({
+      id: run.id,
+      scheduleId: run.scheduleId,
+      scheduleName: run.schedule.name,
+      status: run.status,
+      totalTarget: run.totalJobs,
+      processedCount: run.completedJobs + run.failedJobs,
+      successCount: run.completedJobs,
+      failedCount: run.failedJobs,
+      updatedAt: run.updatedAt.toISOString(),
+      startedAt: run.startedAt?.toISOString() ?? null,
+    }));
+
+    return { runs, recentEventsByRunId };
+  }
+}
 

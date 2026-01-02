@@ -42,6 +42,7 @@ import {
   Verified,
   Schedule,
   Warning,
+  TimerOff,
 } from '@mui/icons-material';
 import AppCard from '@/components/common/AppCard';
 import AppButton from '@/components/common/AppButton';
@@ -324,6 +325,21 @@ export default function SettingsPage() {
     }
   };
 
+  // 세션 강제 만료 (테스트용)
+  const handleExpireSession = async (sessionId: string) => {
+    if (!confirm('세션을 강제 만료하시겠습니까? (테스트용)')) return;
+    try {
+      setActionLoading(`expire-${sessionId}`);
+      await naverSessionApi.expire(sessionId);
+      await loadNaverSessions();
+    } catch (error) {
+      console.error('세션 만료 실패:', error);
+      alert('세션 만료에 실패했습니다.');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
   // 계정에 연결된 세션 찾기
   const getSessionForAccount = (accountId: string): NaverSession | undefined => {
     return naverSessions.find((s) => s.naverAccountId === accountId);
@@ -384,6 +400,17 @@ export default function SettingsPage() {
   };
 
   const estimateRemainingValidity = (session: NaverSession) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/3704668f-c976-4b6d-8f2f-d0544aad7165',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'settings/page.tsx:estimateRemainingValidity',message:'유효기간 계산 로직',data:{sessionId:session.id,sessionStatus:session.status,lastVerifiedAt:session.lastVerifiedAt,createdAt:session.createdAt},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
+
+    // [FIX] 세션 상태가 EXPIRED, ERROR, CHALLENGE_REQUIRED면 "만료됨"으로 표시
+    // UI 계산(lastVerifiedAt+30일)과 실제 DB 상태(session.status)의 불일치 해결
+    const expiredStatuses = ['EXPIRED', 'ERROR', 'CHALLENGE_REQUIRED'];
+    if (expiredStatuses.includes(session.status)) {
+      return { text: '만료됨', expiresAt: null };
+    }
+
     const ttlDays = 30; // 네이버 세션 쿠키 가정치
     const base = session.lastVerifiedAt || session.createdAt;
     if (!base) return null;
@@ -733,6 +760,26 @@ export default function SettingsPage() {
                                     disabled={session.status === 'PENDING'}
                                   >
                                     <LinkOff fontSize="small" />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title="세션 만료 (테스트)">
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    color="warning"
+                                    onClick={() => handleExpireSession(session.id)}
+                                    disabled={
+                                      actionLoading === `expire-${session.id}` ||
+                                      session.status === 'PENDING' ||
+                                      session.status === 'EXPIRED'
+                                    }
+                                  >
+                                    {actionLoading === `expire-${session.id}` ? (
+                                      <CircularProgress size={18} />
+                                    ) : (
+                                      <TimerOff fontSize="small" />
+                                    )}
                                   </IconButton>
                                 </span>
                               </Tooltip>

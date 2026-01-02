@@ -1,8 +1,12 @@
 'use client';
 
 /**
- * 섹션 B: 오늘 예정 타임라인 컴포넌트
- * 컴팩트 프리미엄 디자인 - 오늘 예정된 게시 작업을 시간순으로 표시
+ * 섹션 B: 오늘 예정 타임라인 컴포넌트 - Premium Edition
+ * 
+ * 개선 사항:
+ * - 빈 상태를 컴팩트하게 축소
+ * - 예정이 있을 때 강조
+ * - 메뉴 액션 최적화
  */
 
 import { useState } from 'react';
@@ -32,6 +36,7 @@ import {
   MoreVert,
   OpenInNew,
   CalendarMonth,
+  Add,
 } from '@mui/icons-material';
 import { useRouter } from 'next/navigation';
 
@@ -151,7 +156,7 @@ export default function TodayTimeline({
         elevation={0}
         sx={{
           p: 2.5,
-          borderRadius: 2.5,
+          borderRadius: 3,
           border: '1px solid',
           borderColor: 'divider',
           height: '100%',
@@ -159,50 +164,56 @@ export default function TodayTimeline({
       >
         <Skeleton width="50%" height={24} sx={{ mb: 2 }} />
         {[1, 2, 3].map((i) => (
-          <Skeleton key={i} variant="rounded" height={56} sx={{ mb: 1 }} />
+          <Skeleton key={i} variant="rounded" height={56} sx={{ mb: 1, borderRadius: 2 }} />
         ))}
       </Paper>
     );
   }
 
-  // 빈 상태
+  // ========================================
+  // 빈 상태 - 컴팩트
+  // ========================================
   if (items.length === 0) {
     return (
       <Paper
         elevation={0}
         sx={{
-          p: 3,
-          borderRadius: 2.5,
-          border: '1px solid',
+          p: 2.5,
+          borderRadius: 3,
+          border: '1px dashed',
           borderColor: 'divider',
-          textAlign: 'center',
-          height: '100%',
+          backgroundColor: (theme) => alpha(theme.palette.grey[500], 0.02),
           display: 'flex',
-          flexDirection: 'column',
           alignItems: 'center',
-          justifyContent: 'center',
+          justifyContent: 'space-between',
+          gap: 2,
         }}
       >
-        <Avatar
-          sx={{
-            width: 56,
-            height: 56,
-            mb: 2,
-            backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.1),
-          }}
-        >
-          <CalendarMonth sx={{ fontSize: 28, color: 'primary.main' }} />
-        </Avatar>
-        <Typography variant="body1" sx={{ fontWeight: 600, mb: 0.5 }}>
-          오늘 예정된 게시가 없습니다
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          스케줄을 설정하면 여기에 표시됩니다
-        </Typography>
+        <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+          <Avatar
+            sx={{
+              width: 44,
+              height: 44,
+              backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.08),
+            }}
+          >
+            <CalendarMonth sx={{ fontSize: 22, color: 'primary.main' }} />
+          </Avatar>
+          <Box>
+            <Typography variant="body1" sx={{ fontWeight: 600, mb: 0.25 }}>
+              오늘 예정된 게시가 없습니다
+            </Typography>
+            <Typography variant="caption" color="text.secondary">
+              스케줄을 설정하면 여기에 표시됩니다
+            </Typography>
+          </Box>
+        </Box>
         <Button
           variant="outlined"
           size="small"
-          onClick={() => router.push('/schedules')}
+          startIcon={<Add />}
+          onClick={() => router.push('/schedules/new')}
+          sx={{ flexShrink: 0 }}
         >
           스케줄 만들기
         </Button>
@@ -210,11 +221,14 @@ export default function TodayTimeline({
     );
   }
 
+  // ========================================
+  // 예정 있음 - 타임라인 표시
+  // ========================================
   return (
     <Paper
       elevation={0}
       sx={{
-        borderRadius: 2.5,
+        borderRadius: 3,
         border: '1px solid',
         borderColor: 'divider',
         overflow: 'hidden',
@@ -239,15 +253,15 @@ export default function TodayTimeline({
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
           <Avatar
             sx={{
-              width: 32,
-              height: 32,
+              width: 36,
+              height: 36,
               backgroundColor: (theme) => alpha(theme.palette.primary.main, 0.1),
             }}
           >
-            <CalendarMonth sx={{ fontSize: 18, color: 'primary.main' }} />
+            <CalendarMonth sx={{ fontSize: 20, color: 'primary.main' }} />
           </Avatar>
           <Box>
-            <Typography variant="body1" sx={{ fontWeight: 600, lineHeight: 1.2 }}>
+            <Typography variant="h6" sx={{ fontWeight: 700, fontSize: '1rem', lineHeight: 1.2 }}>
               오늘 예정
             </Typography>
             <Typography variant="caption" color="text.secondary">
@@ -259,14 +273,14 @@ export default function TodayTimeline({
           size="small"
           variant="text"
           onClick={() => router.push('/schedules')}
-          sx={{ minWidth: 'auto', px: 1 }}
+          sx={{ minWidth: 'auto', px: 1, fontWeight: 600 }}
         >
           전체
         </Button>
       </Box>
 
-      {/* 타임라인 리스트 - 최대 4개만 표시 */}
-      <Box sx={{ flex: 1, overflow: 'auto', maxHeight: 240 }}>
+      {/* 타임라인 리스트 */}
+      <Box sx={{ flex: 1, overflow: 'auto', maxHeight: 280 }}>
         {items.slice(0, 4).map((item, index) => {
           const config = STATUS_CONFIG[item.status];
           const StatusIcon = config.icon;
@@ -279,7 +293,7 @@ export default function TodayTimeline({
                 alignItems: 'center',
                 gap: 1.5,
                 px: 2.5,
-                py: 1.5,
+                py: 1.75,
                 borderBottom: index < Math.min(items.length, 4) - 1 ? '1px solid' : 'none',
                 borderColor: 'divider',
                 transition: 'background-color 0.15s ease',
@@ -292,9 +306,9 @@ export default function TodayTimeline({
               <Typography
                 variant="body2"
                 sx={{
-                  width: 48,
+                  width: 50,
                   flexShrink: 0,
-                  fontWeight: 600,
+                  fontWeight: 700,
                   fontVariantNumeric: 'tabular-nums',
                   color: config.textColor,
                 }}
@@ -305,8 +319,8 @@ export default function TodayTimeline({
               {/* 상태 아이콘 */}
               <Avatar
                 sx={{
-                  width: 28,
-                  height: 28,
+                  width: 30,
+                  height: 30,
                   backgroundColor: config.bgColor,
                   flexShrink: 0,
                 }}
@@ -319,7 +333,7 @@ export default function TodayTimeline({
                 <Typography
                   variant="body2"
                   sx={{
-                    fontWeight: 500,
+                    fontWeight: 600,
                     overflow: 'hidden',
                     textOverflow: 'ellipsis',
                     whiteSpace: 'nowrap',
@@ -380,13 +394,14 @@ export default function TodayTimeline({
             borderTop: '1px solid',
             borderColor: 'divider',
             textAlign: 'center',
-            backgroundColor: (theme) => alpha(theme.palette.action.hover, 0.3),
+            backgroundColor: (theme) => alpha(theme.palette.grey[500], 0.02),
           }}
         >
           <Button
             size="small"
             variant="text"
             onClick={() => router.push('/schedules')}
+            sx={{ fontWeight: 600 }}
           >
             +{items.length - 4}건 더 보기
           </Button>

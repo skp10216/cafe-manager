@@ -296,5 +296,60 @@ export interface RecentResultsResponse {
   total: number;
 }
 
+// ==============================================
+// 7. Active Run API 응답 (실행 중 프로세스 추적)
+// ==============================================
+
+/** Active Run 정보 */
+export interface ActiveRunInfo {
+  /** Run ID */
+  id: string;
+  /** 스케줄 ID */
+  scheduleId: string;
+  /** 스케줄명 */
+  scheduleName: string;
+  /** 실행 상태 */
+  status: string;
+  /** 목표 수 (총 게시글 수) */
+  totalTarget: number;
+  /** 처리된 수 (성공 + 실패) */
+  processedCount: number;
+  /** 성공 수 */
+  successCount: number;
+  /** 실패 수 */
+  failedCount: number;
+  /** 마지막 업데이트 시간 */
+  updatedAt: string;
+  /** 시작 시간 */
+  startedAt: string | null;
+}
+
+/** Active Run 이벤트 (최근 결과) */
+export interface ActiveRunEvent {
+  /** 시퀀스 번호 (n번째 시도) */
+  index: number;
+  /** 결과 */
+  result: 'SUCCESS' | 'FAILED';
+  /** 에러 코드 (실패 시) */
+  errorCode?: string;
+  /** 발생 시간 */
+  createdAt: string;
+}
+
+/** Active Run 응답 (단일 - 레거시 호환용) */
+export interface ActiveRunResponse {
+  /** 실행 중인 Run 정보 (없으면 null) */
+  run: ActiveRunInfo | null;
+  /** 최근 이벤트들 (최대 5개) */
+  recentEvents: ActiveRunEvent[];
+}
+
+/** Active Runs 응답 (복수 - 다중 스케줄 동시 실행 지원) */
+export interface ActiveRunsResponse {
+  /** 실행 중인 Run 목록 */
+  runs: ActiveRunInfo[];
+  /** Run ID별 최근 이벤트들 (최대 5개씩) */
+  recentEventsByRunId: Record<string, ActiveRunEvent[]>;
+}
 
 
